@@ -63,6 +63,9 @@ Pisz po polsku.`,
     return NextResponse.json({ result, deal_id })
   } catch (err) {
     console.error('[analyze-transcript]', err)
+    if (err instanceof Error && err.message.includes('OPENAI_API_KEY is not configured')) {
+      return NextResponse.json({ error: 'Serwis AI nie jest skonfigurowany' }, { status: 503 })
+    }
     return NextResponse.json({ error: 'Błąd analizy transkrypcji' }, { status: 500 })
   }
 }
