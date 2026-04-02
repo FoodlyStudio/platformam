@@ -10,6 +10,7 @@ import { KanbanBoard } from '@/components/sales/KanbanBoard'
 import { DealSlideOver, SlideOverTab } from '@/components/sales/DealSlideOver'
 import { WinDealModal } from '@/components/sales/WinDealModal'
 import { LossDealModal } from '@/components/sales/LossDealModal'
+import { NewDealModal } from '@/components/sales/NewDealModal'
 import { TrendingUp, DollarSign, Target, BarChart3, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import toast from 'react-hot-toast'
@@ -22,13 +23,14 @@ const ACTIVE_STAGES: PipelineStage[] = [
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function SalesPage() {
-  const { deals, loading, fetch, moveStage, update } = useDeals()
+  const { deals, loading, fetch, create, moveStage, update } = useDeals()
 
   // Selection state
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null)
   const [selectedTab, setSelectedTab] = useState<SlideOverTab>('Szczegóły')
 
   // Modals
+  const [newDealModal, setNewDealModal] = useState(false)
   const [winModal, setWinModal] = useState<string | null>(null)   // dealId
   const [lossModal, setLossModal] = useState<string | null>(null) // dealId
 
@@ -178,7 +180,7 @@ export default function SalesPage() {
         </select>
 
         <div className="ml-auto">
-          <Button size="sm">
+          <Button size="sm" onClick={() => setNewDealModal(true)}>
             <Plus size={14} />
             Nowy deal
           </Button>
@@ -215,6 +217,14 @@ export default function SalesPage() {
           initialTab={selectedTab}
           onClose={() => setSelectedDeal(null)}
           onUpdate={update}
+        />
+      )}
+
+      {/* New deal modal */}
+      {newDealModal && (
+        <NewDealModal
+          onConfirm={create}
+          onClose={() => setNewDealModal(false)}
         />
       )}
 
