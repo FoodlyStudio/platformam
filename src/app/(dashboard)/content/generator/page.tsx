@@ -19,6 +19,7 @@ import {
   AlignLeft,
   Layout,
   Repeat2,
+  ImagePlus,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { format as dateFmt } from 'date-fns'
@@ -290,6 +291,20 @@ function CarouselTab({
   const [slides, setSlides] = useState<Slide[]>([])
   const [current, setCurrent] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [styleImage, setStyleImage] = useState<{ base64: string; mimeType: string; preview: string } | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleStyleImageChange = (file: File | null) => {
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string
+      const [header, base64] = dataUrl.split(',')
+      const mimeType = header.match(/:(.*?);/)?.[1] ?? 'image/jpeg'
+      setStyleImage({ base64, mimeType, preview: dataUrl })
+    }
+    reader.readAsDataURL(file)
+  }
 
   const generate = async () => {
     if (!topic.trim()) return toast.error('Podaj temat karuzeli')
@@ -298,7 +313,11 @@ function CarouselTab({
       const res = await fetch('/api/ai/generate-carousel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, slideCount, segment, tone }),
+        body: JSON.stringify({
+          topic, slideCount, segment, tone,
+          styleImageBase64: styleImage?.base64,
+          styleImageMimeType: styleImage?.mimeType,
+        }),
       })
       const { slides: s, error } = await res.json()
       if (error) throw new Error(error)
@@ -389,6 +408,45 @@ function CarouselTab({
         </div>
         <div className="flex items-end">
           <GenerateButton onClick={generate} loading={loading} />
+        </div>
+
+        {/* Style reference image */}
+        <div className="col-span-2">
+          <FieldLabel>Styl referencyjny (opcjonalnie)</FieldLabel>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => handleStyleImageChange(e.target.files?.[0] ?? null)}
+          />
+          {styleImage ? (
+            <div className="flex items-center gap-3 p-2 rounded-lg border border-white/10 bg-dark">
+              <img
+                src={styleImage.preview}
+                alt="Styl referencyjny"
+                className="w-16 h-16 object-cover rounded-lg flex-shrink-0"
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-white/70 font-medium">Zdjęcie referencyjne wgrane</p>
+                <p className="text-[10px] text-white/35 mt-0.5">AI dopasuje wskazówki designerskie do tego stylu</p>
+              </div>
+              <button
+                onClick={() => { setStyleImage(null); if (fileInputRef.current) fileInputRef.current.value = '' }}
+                className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-white/10 text-white/40 hover:text-white transition-colors flex-shrink-0"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-dashed border-white/15 hover:border-primary/40 hover:bg-primary/5 text-white/40 hover:text-white/70 transition-all text-xs"
+            >
+              <ImagePlus size={16} />
+              <span>Dodaj screenshot z Instagrama — AI skopiuje styl</span>
+            </button>
+          )}
         </div>
       </div>
 
