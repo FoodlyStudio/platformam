@@ -1,83 +1,81 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getOpenAI } from '@/lib/openai'
-
-
-const CHANNEL_LABELS: Record<string, string> = {
-  instagram: 'Instagram',
-  linkedin_company: 'LinkedIn (firma)',
-  linkedin_personal: 'LinkedIn (osobisty)',
-  facebook: 'Facebook',
-  newsletter: 'Newsletter e-mail',
-}
-
-const TYPE_LABELS: Record<string, string> = {
-  carousel: 'karuzela (seria slajdów — podaj konspekt z podziałem na slajdy)',
-  single_post: 'pojedynczy post graficzny z podpisem',
-  reel_script: 'skrypt do Reels/TikTok (podzielony na sceny)',
-  story: 'Story (seria 3-5 kart)',
-  linkedin_post: 'post tekstowy LinkedIn',
-  article: 'długi artykuł ekspercki',
-  newsletter: 'newsletter z sekcjami',
-}
-
-const SYSTEM_PROMPT = `Jesteś ekspertem od marketingu treści dla AM Automations — polskiej agencji web i automatyzacji AI.
-Sprzedajemy: strony www z konwersją (2-5k PLN), chatboty AI (3-8k PLN), systemy wewnętrzne (8-25k PLN).
-Klienci: właściciele małych firm (gabinety medyczne, kancelarie, beauty, budowlanka, szkolenia).
-
-Zasady pisania:
-- Konkretne liczby i fakty (nie "znacznie" ale "o 40%")
-- Krótkie zdania, dużo łamania linii
-- Hook w pierwszym zdaniu
-- Żadnego korporacyjnego bełkotu
-- Emoji tylko jeśli pasuje do kanału (Instagram: tak, LinkedIn: oszczędnie)
-
-Odpowiedz WYŁĄCZNIE prawidłowym JSON:
-{
-  "title": "Krótki tytuł/temat (max 60 znaków)",
-  "content_body": "Treść posta gotowa do publikacji — używaj \\n\\n między akapitami",
-  "hook": "Mocne pierwsze zdanie/nagłówek (max 120 znaków)",
-  "cta": "Konkretne wezwanie do działania (jedno zdanie)",
-  "hashtags": ["automatyzacja", "aibiznes", "malafirma"]
-}`
+import { getCompanyProfile, buildCompanyContext } from '@/lib/getCompanyProfile'
 
 export async function POST(req: NextRequest) {
   try {
-    const { channel, content_type, title, hook, topic } = (await req.json()) as {
-      channel?: string
-      content_type?: string
-      title?: string
-      hook?: string
-      topic?: string
+    const { channel, content_type, title, hook, slideCount, linkedinProfileUrl } = await req.json()
+
+    const profile = await getCompanyProfile()
+    const companyCtx = buildCompanyContext(profile)
+
+    const CHANNEL_LABELS: Record<string, string> = {
+      instagram: 'Instagram',
+      linkedin_company: 'LinkedIn (profil firmy)',
+      linkedin_personal: 'LinkedIn (profil osobisty)',
+      facebook: 'Facebook',
+      newsletter: 'Newsletter e-mail',
     }
 
-    const channelLabel = CHANNEL_LABELS[channel ?? ''] ?? (channel ?? 'ogólny')
-    const typeLabel = TYPE_LABELS[content_type ?? ''] ?? (content_type ?? 'post')
+    const slides = slideCount ?? 7
+    const TYPE_LABELS: Record<string, string> = {
+      carousel: `karuzela (${slides} slajdów — napisz treść dla każdego slajdu osobno, oznaczając je: [Slajd 1], [Slajd 2], itd.)`,
+      single_post: 'post z opisem',
+      reel_script: 'skrypt do Reels (ok. 30 sek.)',
+      story: 'story (krótki tekst)',
+      linkedin_post: 'post LinkedIn (max 1300 znaków, storytelling, hook na początku)',
+      article: 'artykuł (5-7 akapitów)',
+      newsletter: 'newsletter',
+    }
 
-    const completion = await getOpenAI().chat.completions.create({
+    const channelLabel = CHANNEL_LABELS[channel] ?? channel
+    const typeLabel = TYPE_LABELS[content_type] ?? content_type
+
+    const openai = getOpenAI()
+
+    const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        {
+          role: 'system',
+          content: `Jesteś ekspertem od content marketingu B2B w Polsce. Tworzysz treści dla firmy na podstawie jej danych.
+
+KONTEKST FIRMY (Baza Wiedzy):
+${companyCtx}
+
+Ton: ${profile?.tone_of_voice || 'bezpośredni, konkretny, ekspercki'}
+
+Kanał: ${channelLabel}
+Format: ${typeLabel}
+${linkedinProfileUrl ? `Profil LinkedIn: ${linkedinProfileUrl}` : ''}
+
+WAŻNE: Treść musi być KONKRETNA i oparta na danych firmy z Bazy Wiedzy. NIE pisz ogólnych treści.
+
+Odpowiedz TYLKO JSON-em:
+{
+  "title": "<tytuł posta>",
+  "hook": "<hook otwierający — pierwsze zdanie które zatrzyma przewijanie>",
+  "content_body": "<pełna treść posta>",
+  "cta": "<call to action>",
+  "hashtags": ["<hashtag1>", "<hashtag2>", "<hashtag3>"]
+}`,
+        },
         {
           role: 'user',
-          content: [
-            `Kanał: ${channelLabel}`,
-            `Typ treści: ${typeLabel}`,
-            `Temat/tytuł: ${title || topic || 'automatyzacja biznesowa dla małych firm'}`,
-            hook ? `Rozwiń ten hook: "${hook}"` : '',
-          ]
-            .filter(Boolean)
-            .join('\n'),
+          content: `Napisz ${typeLabel} na temat: "${title || hook || 'ogólny temat firmy'}"
+${hook ? `Użyj tego hooka: "${hook}"` : ''}
+${linkedinProfileUrl ? `Dostosuj język i styl do profilu: ${linkedinProfileUrl}` : ''}`,
         },
       ],
       response_format: { type: 'json_object' },
-      temperature: 0.82,
-      max_tokens: 900,
+      max_tokens: 1200,
+      temperature: 0.7,
     })
 
-    const result = JSON.parse(completion.choices[0]?.message?.content ?? '{}')
+    const result = JSON.parse(completion.choices[0].message.content ?? '{}')
     return NextResponse.json({ result })
   } catch (err) {
-    console.error('[generate-content]', err)
-    return NextResponse.json({ error: 'Failed to generate content' }, { status: 500 })
+    console.error('generate-content error:', err)
+    return NextResponse.json({ error: 'Błąd generowania treści' }, { status: 500 })
   }
 }

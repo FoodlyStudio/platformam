@@ -4,9 +4,9 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
-  /* AM Automations Brand Colors */
-  --color-primary:   #6C5CE7;
-  --color-secondary: #00B894;
+  /* AgencyOS Brand Colors */
+  --color-primary:   #6366f1;
+  --color-secondary: #8b5cf6;
   --color-accent:    #FD7272;
 
   /* Surfaces (dark defaults) */
@@ -53,6 +53,10 @@
 }
 
 * { box-sizing: border-box; }
+
+/* ── Configurator font utilities ────────────────────── */
+.font-heading { font-family: var(--font-syne, system-ui, sans-serif); }
+.font-body    { font-family: var(--font-dm-sans, system-ui, sans-serif); }
 
 body {
   background-color: var(--bg-page);
@@ -103,9 +107,30 @@ body {
   transform: translateY(-50%);
   width: 3px;
   height: 60%;
-  background: #6C5CE7;
+  background: var(--color-primary);
   border-radius: 0 3px 3px 0;
 }
+
+/* ── Mediovee brand theme ────────────────────────────── */
+.theme-mediovee {
+  --color-primary:   #FC0FC0;
+  --color-secondary: #e879f9;
+  --color-accent:    #FC0FC0;
+}
+
+/* Hardcoded indigo → Mediovee pink overrides */
+.theme-mediovee .text-\[\#6366f1\]          { color: #FC0FC0; }
+.theme-mediovee .text-\[\#a5b4fc\]          { color: #fbbfe9; }
+.theme-mediovee .bg-\[\#6366f1\]\/10        { background-color: rgba(252,15,192,0.10); }
+.theme-mediovee .bg-\[\#6366f1\]\/12        { background-color: rgba(252,15,192,0.12); }
+.theme-mediovee .bg-\[\#6366f1\]\/15        { background-color: rgba(252,15,192,0.15); }
+.theme-mediovee .bg-\[\#6366f1\]\/20        { background-color: rgba(252,15,192,0.20); }
+.theme-mediovee .border-\[\#6366f1\]\/25    { border-color: rgba(252,15,192,0.25); }
+.theme-mediovee .border-\[\#6366f1\]\/30    { border-color: rgba(252,15,192,0.30); }
+.theme-mediovee .text-\[\#6366f1\]\/60      { color: rgba(252,15,192,0.60); }
+.theme-mediovee .text-\[\#6366f1\]\/70      { color: rgba(252,15,192,0.70); }
+.theme-mediovee .ring-\[\#6366f1\]          { --tw-ring-color: #FC0FC0; }
+.theme-mediovee ::selection                  { background: rgba(252,15,192,0.28); }
 
 /* ── Light mode overrides for components using hardcoded dark colors ── */
 .light .bg-\[\#0F0F1A\],

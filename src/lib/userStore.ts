@@ -1,17 +1,21 @@
 // Simple user store — no Supabase Auth, just localStorage
-// Two fixed users: Adrian and Maciek
+// Demo users: Bartosz and Karolina, password: Demo123
 
 export interface AppUser {
   id: string
   name: string
+  fullName: string
+  company: string
   initials: string
   color: string
 }
 
 export const USERS: AppUser[] = [
-  { id: 'adrian', name: 'Adrian', initials: 'AK', color: '#6C5CE7' },
-  { id: 'maciek', name: 'Maciek', initials: 'MK', color: '#00B894' },
+  { id: 'bartosz', name: 'Bartosz', fullName: 'Bartosz', company: '', initials: 'B', color: '#6366f1' },
+  { id: 'karolina', name: 'Karolina', fullName: 'Karolina', company: '', initials: 'K', color: '#8b5cf6' },
 ]
+
+export const DEMO_PASSWORD = 'Demo123'
 
 const KEY = 'am_current_user'
 

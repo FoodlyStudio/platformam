@@ -38,13 +38,11 @@ export function CarouselGenerator() {
     <div className="space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Input
-          label="Topic"
           value={topic}
           onChange={(e) => setTopic(e.target.value)}
           placeholder="e.g. How to close enterprise deals"
         />
         <Input
-          label="Target audience"
           value={audience}
           onChange={(e) => setAudience(e.target.value)}
           placeholder="e.g. B2B founders, sales managers"

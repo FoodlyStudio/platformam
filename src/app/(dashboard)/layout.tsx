@@ -10,19 +10,19 @@ import { MainContent } from '@/components/layout/MainContent'
 import { useAppUser } from '@/contexts/UserContext'
 
 function DashboardGuard({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAppUser()
+  const { user, loading, switchUser } = useAppUser()
   const router = useRouter()
 
   useEffect(() => {
     if (!loading && !user) {
-      router.replace('/login')
+      router.push('/login')
     }
-  }, [user, loading, router])
+  }, [user, loading, router, switchUser])
 
-  if (loading || !user) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-[#1A1A2E] flex items-center justify-center">
-        <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        <div className="w-6 h-6 border-2 border-[#6366f1] border-t-transparent rounded-full animate-spin" />
       </div>
     )
   }
@@ -38,7 +38,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Sidebar />
           <MainContent>
             <Topbar />
-            <main className="flex-1 p-5 md:p-6 overflow-x-hidden">
+            <main className="flex-1 p-3 sm:p-4 md:p-6 overflow-x-hidden">
               {children}
             </main>
           </MainContent>

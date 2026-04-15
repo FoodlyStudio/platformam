@@ -1,625 +1,850 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
-import { useFinance } from '@/hooks/useFinance'
-import { createClient } from '@/lib/supabase/client'
-import { formatCurrency } from '@/lib/utils'
-import { Income, Expense, Deal, PipelineStage, ExpenseCategory } from '@/types'
-import {
-  format, subMonths, isSameMonth, startOfMonth, endOfMonth,
-  isWithinInterval, addDays, differenceInDays,
-} from 'date-fns'
-import { pl } from 'date-fns/locale'
-import {
-  ComposedChart, Area, BarChart, Bar, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine,
-  ResponsiveContainer,
-} from 'recharts'
+import { useState, useEffect, useCallback } from 'react'
 import {
   TrendingUp, TrendingDown, DollarSign, Target,
-  AlertTriangle, AlertCircle, Trophy, RefreshCw,
+  CheckCircle2, Clock, AlertTriangle, X, Plus,
+  Upload, Loader2, FileText, Receipt, Trash2,
+  ArrowUpCircle, ArrowDownCircle, Sparkles,
 } from 'lucide-react'
-import { Card } from '@/components/ui/Card'
+import toast from 'react-hot-toast'
 
-// ─── Stage conversion rates ───────────────────────────────────────────────────
+// ─── Types ─────────────────────────────────────────────────────────────────────
 
-const STAGE_PROB: Record<PipelineStage, number> = {
-  nowy_lead: 0.05,
-  dm_wyslany: 0.10,
-  odpowiedz: 0.20,
-  rozmowa_umowiona: 0.35,
-  diagnoza_zrobiona: 0.50,
-  oferta_prezentowana: 0.65,
-  negocjacje: 0.80,
-  wygrana: 1.0,
-  przegrana: 0,
-  nie_teraz: 0.05,
+type IncomeStatus = 'opłacona' | 'oczekująca' | 'zaległa'
+type IncomeType   = 'zaliczka' | 'rata' | 'końcowa' | 'abonament' | 'faktura'
+
+interface IncomeEntry {
+  id: string
+  client: string
+  project: string
+  amount: number        // netto
+  vatRate: number       // 0, 5, 8, 23...
+  vatAmount: number
+  grossAmount: number
+  netProfit: number     // kwota czysta (netto jeśli VAT>0, brutto jeśli VAT=0)
+  type: IncomeType
+  status: IncomeStatus
+  date: string
+  invoiceNumber?: string
+  fromInvoice?: boolean
 }
 
-// ─── Project type labels ──────────────────────────────────────────────────────
-
-const PROJECT_TYPE_LABELS: Record<string, string> = {
-  strona: 'Strona',
-  system: 'System',
-  aplikacja: 'Aplikacja',
-  chatbot: 'Chatbot',
-  landing: 'Landing',
-  inne: 'Inne',
+interface ExpenseEntry {
+  id: string
+  name: string
+  category: string
+  amount: number        // netto
+  vatRate: number
+  vatAmount: number
+  grossAmount: number
+  recurring: boolean
+  date: string
+  invoiceNumber?: string
+  fromInvoice?: boolean
 }
 
-// ─── Category colors ──────────────────────────────────────────────────────────
+type Tab = 'overview' | 'income' | 'expenses'
 
-const CATEGORY_COLORS: Record<ExpenseCategory, string> = {
-  podatki: '#f87171',
-  ksiegowosc: '#fb923c',
-  narzedzia: '#facc15',
-  hosting: '#4ade80',
-  marketing: '#34d399',
-  licencje: '#60a5fa',
-  sprzet: '#a78bfa',
-  biuro: '#f472b6',
-  podroze: '#38bdf8',
-  szkolenia: '#fbbf24',
-  inne: '#94a3b8',
+// ─── LocalStorage ─────────────────────────────────────────────────────────────
+
+const LS_INCOMES   = 'agencyos_incomes'
+const LS_EXPENSES  = 'agencyos_expenses'
+
+function loadIncomes(): IncomeEntry[]  { try { return JSON.parse(localStorage.getItem(LS_INCOMES)  ?? '[]') } catch { return [] } }
+function loadExpenses(): ExpenseEntry[] { try { return JSON.parse(localStorage.getItem(LS_EXPENSES) ?? '[]') } catch { return [] } }
+function saveIncomes(d: IncomeEntry[])  { localStorage.setItem(LS_INCOMES,  JSON.stringify(d)) }
+function saveExpenses(d: ExpenseEntry[]) { localStorage.setItem(LS_EXPENSES, JSON.stringify(d)) }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatPLN(v: number) {
+  return v.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' PLN'
 }
 
-const CATEGORY_LABELS: Record<ExpenseCategory, string> = {
-  podatki: 'Podatki',
-  ksiegowosc: 'Księgowość',
-  narzedzia: 'Narzędzia',
-  hosting: 'Hosting',
-  marketing: 'Marketing',
-  licencje: 'Licencje',
-  sprzet: 'Sprzęt',
-  biuro: 'Biuro',
-  podroze: 'Podróże',
-  szkolenia: 'Szkolenia',
-  inne: 'Inne',
+function calcVat(net: number, vatRate: number) {
+  const vatAmount  = Math.round(net * vatRate / 100 * 100) / 100
+  const gross      = Math.round((net + vatAmount) * 100) / 100
+  const netProfit  = vatRate === 0 ? gross : net  // 0% VAT: zysk = brutto; inny: zysk = netto
+  return { vatAmount, gross, netProfit }
 }
 
-// ─── Shared tooltip style ─────────────────────────────────────────────────────
+function currentMonth() { return new Date().toISOString().slice(0, 7) }
+function formatDate(d: string) { try { return new Date(d).toLocaleDateString('pl-PL') } catch { return d } }
 
-const TOOLTIP_STYLE = {
-  contentStyle: {
-    background: '#1a1a2e',
-    border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: 8,
-    fontSize: 12,
-  },
-  itemStyle: { color: '#fff' },
-  labelStyle: { color: 'rgba(255,255,255,0.6)' },
+const INCOME_STATUS_CONFIG = {
+  'opłacona':   { icon: CheckCircle2,  color: 'text-green-400',  label: 'Opłacona' },
+  'oczekująca': { icon: Clock,         color: 'text-amber-400',  label: 'Oczekująca' },
+  'zaległa':    { icon: AlertTriangle, color: 'text-red-400',    label: 'Zaległa' },
 }
 
-// ─── Metric Card ──────────────────────────────────────────────────────────────
+const VAT_RATES = [0, 5, 8, 23]
+const EXPENSE_CATEGORIES = ['Narzędzia', 'Reklama', 'Podwykonawcy', 'Biuro', 'Szkolenia', 'Sprzęt', 'Inne']
 
-function MetricCard({
-  icon: Icon,
-  label,
-  value,
-  sub,
-  subPositive,
-  valueColor,
+// ─── Invoice Upload Modal ─────────────────────────────────────────────────────
+
+interface InvoiceData {
+  invoice_number?: string | null
+  invoice_date?: string | null
+  due_date?: string | null
+  seller_name?: string | null
+  buyer_name?: string | null
+  description?: string | null
+  net_amount?: number
+  vat_rate?: number
+  vat_amount?: number
+  gross_amount?: number
+  currency?: string
+  type?: 'income' | 'expense' | 'unknown'
+  category?: string
+  notes?: string | null
+}
+
+function InvoiceUploadModal({
+  onClose,
+  onAddIncome,
+  onAddExpense,
 }: {
-  icon: React.ElementType
-  label: string
-  value: string
-  sub?: string
-  subPositive?: boolean
-  valueColor?: string
+  onClose: () => void
+  onAddIncome: (e: IncomeEntry) => void
+  onAddExpense: (e: ExpenseEntry) => void
 }) {
+  const [file, setFile]             = useState<File | null>(null)
+  const [analyzing, setAnalyzing]   = useState(false)
+  const [data, setData]             = useState<InvoiceData | null>(null)
+  const [entryType, setEntryType]   = useState<'income' | 'expense'>('income')
+  const [status, setStatus]         = useState<IncomeStatus>('oczekująca')
+  const [recurring, setRecurring]   = useState(false)
+  const [saved, setSaved]           = useState(false)
+  const [error, setError]           = useState<string | null>(null)
+
+  const handleFile = async (f: File) => {
+    setFile(f)
+    setData(null)
+    setError(null)
+    setAnalyzing(true)
+
+    try {
+      // Convert file to base64
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          const result = reader.result as string
+          // Strip data URL prefix
+          resolve(result.split(',')[1] ?? '')
+        }
+        reader.onerror = reject
+        reader.readAsDataURL(f)
+      })
+
+      const res = await fetch('/api/ai/analyze-invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileBase64: base64, fileName: f.name, mimeType: f.type }),
+      })
+      const json = await res.json()
+      if (json.error) throw new Error(json.error)
+
+      const result: InvoiceData = json.result
+      setData(result)
+      // Auto-detect type
+      if (result.type === 'income') setEntryType('income')
+      else if (result.type === 'expense') setEntryType('expense')
+    } catch (e: unknown) {
+      setError((e as Error).message || 'Błąd analizy faktury')
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
+  const handleSave = () => {
+    if (!data) return
+    const net   = data.net_amount  ?? 0
+    const vat   = data.vat_rate    ?? 23
+    const { vatAmount, gross, netProfit } = calcVat(net, vat)
+
+    if (entryType === 'income') {
+      onAddIncome({
+        id: `inv-${Date.now()}`,
+        client:        data.buyer_name  ?? data.seller_name ?? 'Nieznany',
+        project:       data.description ?? 'Faktura',
+        amount:        net,
+        vatRate:       vat,
+        vatAmount:     data.vat_amount  ?? vatAmount,
+        grossAmount:   data.gross_amount ?? gross,
+        netProfit,
+        type:          'faktura',
+        status,
+        date:          data.invoice_date ?? new Date().toISOString().slice(0, 10),
+        invoiceNumber: data.invoice_number ?? undefined,
+        fromInvoice:   true,
+      })
+    } else {
+      onAddExpense({
+        id: `inv-${Date.now()}`,
+        name:          data.description ?? data.seller_name ?? 'Faktura',
+        category:      data.category ?? 'Inne',
+        amount:        net,
+        vatRate:       vat,
+        vatAmount:     data.vat_amount  ?? vatAmount,
+        grossAmount:   data.gross_amount ?? gross,
+        recurring,
+        date:          data.invoice_date ?? new Date().toISOString().slice(0, 10),
+        invoiceNumber: data.invoice_number ?? undefined,
+        fromInvoice:   true,
+      })
+    }
+    setSaved(true)
+    toast.success(`Faktura dodana jako ${entryType === 'income' ? 'przychód' : 'koszt'}`)
+    setTimeout(onClose, 1200)
+  }
+
+  const inputCls = 'w-full px-3 py-2 rounded-[8px] bg-white/[0.04] border border-white/[0.08] text-white text-[12px] placeholder:text-white/20 focus:outline-none focus:border-[#6366f1]/50 transition-all'
+
   return (
-    <Card>
-      <div className="flex items-start justify-between mb-3">
-        <span className="text-xs text-white/50">{label}</span>
-        <Icon size={14} className="text-white/30 mt-0.5" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-[500px] bg-[#0F0F1A] border border-white/[0.1] rounded-[18px] shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto">
+
+        <div className="flex items-center justify-between px-6 py-5 border-b border-white/[0.07] sticky top-0 bg-[#0F0F1A]">
+          <div>
+            <p className="text-[15px] font-bold text-white">Wgraj fakturę</p>
+            <p className="text-[11px] text-white/40 mt-0.5">AI automatycznie odczyta dane i doda do systemu</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-[8px] text-white/40 hover:text-white hover:bg-white/[0.06] transition-all"><X size={16} /></button>
+        </div>
+
+        {saved ? (
+          <div className="flex flex-col items-center justify-center py-14 gap-3">
+            <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center">
+              <CheckCircle2 size={22} className="text-green-400" />
+            </div>
+            <p className="text-[15px] font-semibold text-white">Faktura dodana!</p>
+          </div>
+        ) : (
+          <div className="p-6 space-y-5">
+            {/* Upload zone */}
+            {!file ? (
+              <label className="flex flex-col items-center justify-center gap-3 p-8 rounded-[14px] border-2 border-dashed border-white/[0.12] bg-white/[0.02] cursor-pointer hover:border-[#6366f1]/50 hover:bg-[#6366f1]/[0.03] transition-all">
+                <div className="w-12 h-12 rounded-full bg-[#6366f1]/15 flex items-center justify-center">
+                  <Upload size={20} className="text-[#6366f1]" />
+                </div>
+                <div className="text-center">
+                  <p className="text-[14px] font-semibold text-white">Kliknij lub przeciągnij fakturę</p>
+                  <p className="text-[11px] text-white/40 mt-1">PDF, JPG, PNG, WEBP — AI odczyta dane automatycznie</p>
+                </div>
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png,.webp"
+                  className="hidden"
+                  onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f) }}
+                />
+              </label>
+            ) : (
+              <div className="flex items-center gap-3 p-3 rounded-[10px] bg-white/[0.04] border border-white/[0.08]">
+                <FileText size={16} className="text-[#6366f1] flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[12px] font-semibold text-white truncate">{file.name}</p>
+                  <p className="text-[10px] text-white/40">{(file.size / 1024).toFixed(0)} KB</p>
+                </div>
+                <button onClick={() => { setFile(null); setData(null) }} className="p-1 rounded text-white/30 hover:text-white transition-colors">
+                  <X size={13} />
+                </button>
+              </div>
+            )}
+
+            {/* Analyzing */}
+            {analyzing && (
+              <div className="flex items-center justify-center gap-3 py-6">
+                <Loader2 size={18} className="text-[#6366f1] animate-spin" />
+                <div>
+                  <p className="text-[13px] font-semibold text-white">AI analizuje fakturę...</p>
+                  <p className="text-[11px] text-white/40">Odczytuje dane: kwoty, VAT, kontrahenci</p>
+                </div>
+              </div>
+            )}
+
+            {error && (
+              <p className="text-[12px] text-red-400 text-center">{error}</p>
+            )}
+
+            {/* Extracted data */}
+            {data && !analyzing && (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 p-3 rounded-[10px] bg-[#6366f1]/[0.07] border border-[#6366f1]/20">
+                  <Sparkles size={13} className="text-[#a5b4fc] flex-shrink-0" />
+                  <p className="text-[12px] text-[#a5b4fc]">AI odczytało fakturę. Sprawdź dane i zapisz.</p>
+                </div>
+
+                {/* Type toggle */}
+                <div>
+                  <p className="text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-2">Typ wpisu</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={() => setEntryType('income')}
+                      className={`flex items-center justify-center gap-2 py-2 rounded-[8px] border text-[12px] font-semibold transition-all ${entryType === 'income' ? 'bg-green-500/15 border-green-500/40 text-green-400' : 'bg-white/[0.04] border-white/[0.08] text-white/50 hover:text-white'}`}>
+                      <ArrowUpCircle size={13} /> Przychód (sprzedaż)
+                    </button>
+                    <button onClick={() => setEntryType('expense')}
+                      className={`flex items-center justify-center gap-2 py-2 rounded-[8px] border text-[12px] font-semibold transition-all ${entryType === 'expense' ? 'bg-red-500/15 border-red-500/40 text-red-400' : 'bg-white/[0.04] border-white/[0.08] text-white/50 hover:text-white'}`}>
+                      <ArrowDownCircle size={13} /> Koszt (zakup)
+                    </button>
+                  </div>
+                </div>
+
+                {/* VAT summary */}
+                <div className="p-4 rounded-[12px] bg-white/[0.03] border border-white/[0.07] space-y-2">
+                  <p className="text-[11px] font-semibold text-white/40 uppercase tracking-wide mb-3">Dane z faktury</p>
+                  {data.invoice_number && (
+                    <div className="flex justify-between">
+                      <span className="text-[11px] text-white/40">Nr faktury</span>
+                      <span className="text-[11px] text-white font-semibold">{data.invoice_number}</span>
+                    </div>
+                  )}
+                  {data.seller_name && (
+                    <div className="flex justify-between">
+                      <span className="text-[11px] text-white/40">Sprzedawca</span>
+                      <span className="text-[11px] text-white font-semibold truncate ml-4 text-right">{data.seller_name}</span>
+                    </div>
+                  )}
+                  {data.buyer_name && (
+                    <div className="flex justify-between">
+                      <span className="text-[11px] text-white/40">Nabywca</span>
+                      <span className="text-[11px] text-white font-semibold truncate ml-4 text-right">{data.buyer_name}</span>
+                    </div>
+                  )}
+                  <div className="border-t border-white/[0.07] pt-2 space-y-1.5 mt-2">
+                    <div className="flex justify-between">
+                      <span className="text-[11px] text-white/40">Netto</span>
+                      <span className="text-[12px] text-white font-bold">{formatPLN(data.net_amount ?? 0)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[11px] text-white/40">VAT ({data.vat_rate ?? 23}%)</span>
+                      <span className="text-[11px] text-white/60">{formatPLN(data.vat_amount ?? 0)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[11px] text-white/40">Brutto</span>
+                      <span className="text-[12px] text-white font-bold">{formatPLN(data.gross_amount ?? 0)}</span>
+                    </div>
+                    <div className="border-t border-white/[0.07] pt-1.5 flex justify-between">
+                      <span className="text-[11px] text-white/50 font-semibold">
+                        {data.vat_rate === 0 ? 'Zysk (VAT 0% → netto = brutto)' : 'Kwota czysta (bez VAT)'}
+                      </span>
+                      <span className="text-[13px] font-bold text-[#22c55e]">
+                        {formatPLN(calcVat(data.net_amount ?? 0, data.vat_rate ?? 23).netProfit)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Status (income) or recurring (expense) */}
+                {entryType === 'income' ? (
+                  <div>
+                    <p className="text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-2">Status płatności</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['opłacona', 'oczekująca', 'zaległa'] as IncomeStatus[]).map(s => (
+                        <button key={s} onClick={() => setStatus(s)}
+                          className={`py-2 rounded-[8px] border text-[11px] font-semibold transition-all capitalize ${status === s ? (s === 'opłacona' ? 'bg-green-500/15 border-green-500/40 text-green-400' : s === 'oczekująca' ? 'bg-amber-500/15 border-amber-500/40 text-amber-400' : 'bg-red-500/15 border-red-500/40 text-red-400') : 'bg-white/[0.04] border-white/[0.08] text-white/50 hover:text-white'}`}>
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" checked={recurring} onChange={e => setRecurring(e.target.checked)} className="w-4 h-4 accent-[#6366f1]" />
+                    <span className="text-[12px] text-white/70">Koszt cykliczny (miesięczny)</span>
+                  </label>
+                )}
+
+                <div className="flex gap-2 pt-1">
+                  <button onClick={onClose}
+                    className="flex-1 py-2.5 rounded-[10px] bg-white/[0.04] border border-white/[0.08] text-white/50 text-[13px] font-medium hover:bg-white/[0.08] hover:text-white transition-all">
+                    Anuluj
+                  </button>
+                  <button onClick={handleSave}
+                    className="flex-1 py-2.5 rounded-[10px] bg-[#6366f1] text-white text-[13px] font-bold hover:bg-[#5254cc] transition-all shadow-lg shadow-indigo-500/25">
+                    Zapisz fakturę
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
-      <div className={`text-2xl font-bold ${valueColor ?? 'text-white'}`}>{value}</div>
-      {sub && (
-        <div className={`text-xs mt-1.5 ${subPositive === true ? 'text-green-400' : subPositive === false ? 'text-red-400' : 'text-white/40'}`}>
-          {sub}
-        </div>
-      )}
-    </Card>
+    </div>
   )
 }
 
-// ─── P&L Area Chart ───────────────────────────────────────────────────────────
+// ─── Add Income Modal (manual) ────────────────────────────────────────────────
 
-interface PLMonthData {
-  month: string
-  revenue: number
-  expenses: number
-  profit: number
-}
+function AddIncomeModal({ onClose, onAdd }: { onClose: () => void; onAdd: (e: IncomeEntry) => void }) {
+  const [form, setForm] = useState({ client: '', project: '', amount: '', vatRate: '23', type: 'zaliczka' as IncomeType, status: 'oczekująca' as IncomeStatus })
+  const [saved, setSaved] = useState(false)
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm(f => ({ ...f, [k]: e.target.value }))
 
-function PLChart({ data }: { data: PLMonthData[] }) {
-  return (
-    <ResponsiveContainer width="100%" height={280}>
-      <ComposedChart data={data} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-        <defs>
-          <linearGradient id="gradRevenue" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor="#4ade80" stopOpacity={0.25} />
-            <stop offset="95%" stopColor="#4ade80" stopOpacity={0} />
-          </linearGradient>
-          <linearGradient id="gradExpenses" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor="#f87171" stopOpacity={0.20} />
-            <stop offset="95%" stopColor="#f87171" stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-        <XAxis dataKey="month" tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} axisLine={false} tickLine={false} />
-        <YAxis
-          tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 11 }}
-          axisLine={false}
-          tickLine={false}
-          tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
-          width={36}
-        />
-        <Tooltip
-          {...TOOLTIP_STYLE}
-          formatter={(value) => formatCurrency(Number(value))}
-        />
-        <Legend formatter={(v) => <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11 }}>{v}</span>} />
-        <ReferenceLine y={15000} stroke="rgba(251,191,36,0.5)" strokeDasharray="4 4" label={{ value: 'Min 15k', fill: 'rgba(251,191,36,0.7)', fontSize: 10 }} />
-        <ReferenceLine y={25000} stroke="rgba(74,222,128,0.5)" strokeDasharray="4 4" label={{ value: 'Cel 25k', fill: 'rgba(74,222,128,0.7)', fontSize: 10 }} />
-        <Area type="monotone" dataKey="revenue" name="Przychód" stroke="#4ade80" strokeWidth={2} fill="url(#gradRevenue)" />
-        <Area type="monotone" dataKey="expenses" name="Koszty" stroke="#f87171" strokeWidth={2} fill="url(#gradExpenses)" />
-      </ComposedChart>
-    </ResponsiveContainer>
-  )
-}
-
-// ─── Cost Pie Chart ───────────────────────────────────────────────────────────
-
-function CostPieChart({ expenses }: { expenses: Expense[] }) {
-  const data = useMemo(() => {
-    const map: Partial<Record<ExpenseCategory, number>> = {}
-    for (const e of expenses) {
-      map[e.category] = (map[e.category] ?? 0) + e.amount
-    }
-    return Object.entries(map)
-      .map(([cat, val]) => ({
-        name: CATEGORY_LABELS[cat as ExpenseCategory] ?? cat,
-        value: val as number,
-        cat: cat as ExpenseCategory,
-      }))
-      .sort((a, b) => b.value - a.value)
-  }, [expenses])
-
-  if (data.length === 0) {
-    return <div className="flex items-center justify-center h-48 text-white/30 text-sm">Brak kosztów w tym miesiącu</div>
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    const net    = parseFloat(form.amount) || 0
+    const vatR   = parseFloat(form.vatRate) || 0
+    const { vatAmount, gross, netProfit } = calcVat(net, vatR)
+    onAdd({ id: `inc-${Date.now()}`, client: form.client, project: form.project, amount: net, vatRate: vatR, vatAmount, grossAmount: gross, netProfit, type: form.type, status: form.status, date: new Date().toISOString().slice(0, 10) })
+    setSaved(true); setTimeout(() => onClose(), 1200)
   }
 
+  const inputCls = 'w-full px-3 py-2 rounded-[8px] bg-white/[0.04] border border-white/[0.08] text-white text-[13px] placeholder:text-white/20 focus:outline-none focus:border-[#6366f1]/50 transition-all'
+  const labelCls = 'block text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1.5'
+
   return (
-    <ResponsiveContainer width="100%" height={220}>
-      <PieChart>
-        <Pie data={data} cx="50%" cy="50%" innerRadius={55} outerRadius={80} paddingAngle={2} dataKey="value">
-          {data.map((entry) => (
-            <Cell key={entry.cat} fill={CATEGORY_COLORS[entry.cat] ?? '#94a3b8'} />
-          ))}
-        </Pie>
-        <Tooltip
-          {...TOOLTIP_STYLE}
-          formatter={(value) => formatCurrency(Number(value))}
-        />
-        <Legend formatter={(v) => <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: 10 }}>{v}</span>} />
-      </PieChart>
-    </ResponsiveContainer>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-[440px] bg-[#0F0F1A] border border-white/[0.1] rounded-[18px] shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-5 border-b border-white/[0.07]">
+          <p className="text-[15px] font-bold text-white">Dodaj przychód</p>
+          <button onClick={onClose} className="p-1.5 rounded-[8px] text-white/40 hover:text-white hover:bg-white/[0.06] transition-all"><X size={16} /></button>
+        </div>
+        {saved ? (
+          <div className="flex flex-col items-center justify-center py-12 gap-3">
+            <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center"><CheckCircle2 size={22} className="text-green-400" /></div>
+            <p className="text-[15px] font-semibold text-white">Przychód dodany!</p>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <div><label className={labelCls}>Klient *</label>
+              <input value={form.client} onChange={set('client')} required placeholder="Nazwa klienta" className={inputCls} /></div>
+            <div><label className={labelCls}>Projekt / opis</label>
+              <input value={form.project} onChange={set('project')} placeholder="Nazwa projektu" className={inputCls} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Kwota netto (PLN) *</label>
+                <input value={form.amount} onChange={set('amount')} required type="number" step="0.01" placeholder="5000.00" className={inputCls} /></div>
+              <div><label className={labelCls}>Stawka VAT (%)</label>
+                <select value={form.vatRate} onChange={set('vatRate')} className="w-full px-3 py-2 rounded-[8px] bg-[#1A1A2E] border border-white/[0.08] text-white text-[13px] focus:outline-none focus:border-[#6366f1]/50 transition-all">
+                  {VAT_RATES.map(v => <option key={v} value={v}>{v}%</option>)}
+                </select></div>
+            </div>
+            {form.amount && (
+              <div className="p-3 rounded-[10px] bg-white/[0.03] border border-white/[0.06] text-[11px] space-y-1">
+                {(() => { const { vatAmount, gross, netProfit } = calcVat(parseFloat(form.amount)||0, parseFloat(form.vatRate)||0); return (
+                  <>
+                    <div className="flex justify-between"><span className="text-white/40">VAT ({form.vatRate}%)</span><span className="text-white/60">{formatPLN(vatAmount)}</span></div>
+                    <div className="flex justify-between"><span className="text-white/40">Brutto</span><span className="text-white font-bold">{formatPLN(gross)}</span></div>
+                    <div className="flex justify-between border-t border-white/[0.07] pt-1"><span className="text-white/50 font-semibold">{parseFloat(form.vatRate)===0?'Zysk (VAT 0%)':'Zysk netto'}</span><span className="text-green-400 font-bold">{formatPLN(netProfit)}</span></div>
+                  </>
+                )})()}
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Typ</label>
+                <select value={form.type} onChange={set('type')} className="w-full px-3 py-2 rounded-[8px] bg-[#1A1A2E] border border-white/[0.08] text-white text-[13px] focus:outline-none focus:border-[#6366f1]/50 transition-all">
+                  <option value="zaliczka">Zaliczka</option><option value="rata">Rata</option><option value="końcowa">Końcowa</option><option value="abonament">Abonament</option>
+                </select></div>
+              <div><label className={labelCls}>Status</label>
+                <select value={form.status} onChange={set('status')} className="w-full px-3 py-2 rounded-[8px] bg-[#1A1A2E] border border-white/[0.08] text-white text-[13px] focus:outline-none focus:border-[#6366f1]/50 transition-all">
+                  <option value="opłacona">Opłacona</option><option value="oczekująca">Oczekująca</option><option value="zaległa">Zaległa</option>
+                </select></div>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button type="button" onClick={onClose} className="flex-1 py-2.5 rounded-[10px] bg-white/[0.04] border border-white/[0.08] text-white/50 text-[13px] font-medium hover:bg-white/[0.08] hover:text-white transition-all">Anuluj</button>
+              <button type="submit" className="flex-1 py-2.5 rounded-[10px] bg-[#6366f1] text-white text-[13px] font-bold hover:bg-[#5254cc] transition-all">Dodaj</button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
   )
 }
 
-// ─── Revenue by Project Type ──────────────────────────────────────────────────
+// ─── Add Expense Modal (manual) ───────────────────────────────────────────────
 
-function RevenueByTypeChart({ income }: { income: Income[] }) {
-  const data = useMemo(() => {
-    const map: Record<string, number> = {}
-    for (const item of income) {
-      const key = item.project_type ?? 'inne'
-      const normalised = Object.keys(PROJECT_TYPE_LABELS).includes(key) ? key : 'inne'
-      map[normalised] = (map[normalised] ?? 0) + item.paid_amount
-    }
-    return Object.entries(map)
-      .map(([type, revenue]) => ({ type: PROJECT_TYPE_LABELS[type] ?? type, revenue }))
-      .sort((a, b) => b.revenue - a.revenue)
-  }, [income])
+function AddExpenseModal({ onClose, onAdd }: { onClose: () => void; onAdd: (e: ExpenseEntry) => void }) {
+  const [form, setForm] = useState({ name: '', category: 'Narzędzia', amount: '', vatRate: '23', recurring: false })
+  const [saved, setSaved] = useState(false)
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm(f => ({ ...f, [k]: e.target.value }))
 
-  if (data.length === 0) {
-    return <div className="flex items-center justify-center h-48 text-white/30 text-sm">Brak danych</div>
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    const net  = parseFloat(form.amount) || 0
+    const vatR = parseFloat(form.vatRate) || 0
+    const { vatAmount, gross } = calcVat(net, vatR)
+    onAdd({ id: `exp-${Date.now()}`, name: form.name, category: form.category, amount: net, vatRate: vatR, vatAmount, grossAmount: gross, recurring: form.recurring, date: new Date().toISOString().slice(0, 10) })
+    setSaved(true); setTimeout(() => onClose(), 1200)
   }
 
+  const inputCls = 'w-full px-3 py-2 rounded-[8px] bg-white/[0.04] border border-white/[0.08] text-white text-[13px] placeholder:text-white/20 focus:outline-none focus:border-[#6366f1]/50 transition-all'
+  const labelCls = 'block text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1.5'
+
   return (
-    <ResponsiveContainer width="100%" height={220}>
-      <BarChart data={data} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-        <XAxis dataKey="type" tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} axisLine={false} tickLine={false} />
-        <YAxis
-          tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 11 }}
-          axisLine={false}
-          tickLine={false}
-          tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
-          width={36}
-        />
-        <Tooltip
-          {...TOOLTIP_STYLE}
-          formatter={(value) => formatCurrency(Number(value))}
-        />
-        <Bar dataKey="revenue" name="Przychód" fill="#818cf8" radius={[4, 4, 0, 0]} />
-      </BarChart>
-    </ResponsiveContainer>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-[420px] bg-[#0F0F1A] border border-white/[0.1] rounded-[18px] shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-5 border-b border-white/[0.07]">
+          <p className="text-[15px] font-bold text-white">Dodaj koszt</p>
+          <button onClick={onClose} className="p-1.5 rounded-[8px] text-white/40 hover:text-white hover:bg-white/[0.06] transition-all"><X size={16} /></button>
+        </div>
+        {saved ? (
+          <div className="flex flex-col items-center justify-center py-12 gap-3">
+            <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center"><CheckCircle2 size={22} className="text-green-400" /></div>
+            <p className="text-[15px] font-semibold text-white">Koszt dodany!</p>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <div><label className={labelCls}>Nazwa *</label>
+              <input value={form.name} onChange={set('name')} required placeholder="np. Subskrypcja Notion" className={inputCls} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Kwota netto (PLN) *</label>
+                <input value={form.amount} onChange={set('amount')} required type="number" step="0.01" placeholder="299.00" className={inputCls} /></div>
+              <div><label className={labelCls}>Stawka VAT (%)</label>
+                <select value={form.vatRate} onChange={set('vatRate')} className="w-full px-3 py-2 rounded-[8px] bg-[#1A1A2E] border border-white/[0.08] text-white text-[13px] focus:outline-none focus:border-[#6366f1]/50 transition-all">
+                  {VAT_RATES.map(v => <option key={v} value={v}>{v}%</option>)}
+                </select></div>
+            </div>
+            {form.amount && (
+              <div className="p-3 rounded-[10px] bg-white/[0.03] border border-white/[0.06] text-[11px]">
+                {(() => { const { gross } = calcVat(parseFloat(form.amount)||0, parseFloat(form.vatRate)||0); return (
+                  <div className="flex justify-between"><span className="text-white/40">Brutto (do zapłaty)</span><span className="text-red-400 font-bold">{formatPLN(gross)}</span></div>
+                )})()}
+              </div>
+            )}
+            <div><label className={labelCls}>Kategoria</label>
+              <select value={form.category} onChange={set('category')} className="w-full px-3 py-2 rounded-[8px] bg-[#1A1A2E] border border-white/[0.08] text-white text-[13px] focus:outline-none focus:border-[#6366f1]/50 transition-all">
+                {EXPENSE_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+              </select></div>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox" checked={form.recurring} onChange={e => setForm(f => ({ ...f, recurring: e.target.checked }))} className="w-4 h-4 accent-[#6366f1]" />
+              <span className="text-[13px] text-white/70">Koszt cykliczny (miesięczny)</span>
+            </label>
+            <div className="flex gap-2 pt-2">
+              <button type="button" onClick={onClose} className="flex-1 py-2.5 rounded-[10px] bg-white/[0.04] border border-white/[0.08] text-white/50 text-[13px] font-medium hover:bg-white/[0.08] hover:text-white transition-all">Anuluj</button>
+              <button type="submit" className="flex-1 py-2.5 rounded-[10px] bg-[#6366f1] text-white text-[13px] font-bold hover:bg-[#5254cc] transition-all">Dodaj</button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
   )
 }
 
-// ─── Cashflow Forecast Row ────────────────────────────────────────────────────
+// ─── Overview Tab ─────────────────────────────────────────────────────────────
 
-function CashflowRow({
-  label,
-  inflow,
-  recurring,
-  balance,
-}: {
-  label: string
-  inflow: number
-  recurring: number
-  balance: number
-}) {
-  const positive = balance >= 0
+function OverviewTab({ incomes, expenses }: { incomes: IncomeEntry[]; expenses: ExpenseEntry[] }) {
+  const month = currentMonth()
+  const monthIncomes  = incomes.filter(i => i.date?.startsWith(month))
+  const monthExpenses = expenses.filter(e => e.date?.startsWith(month))
+
+  const totalIncome   = monthIncomes.filter(i => i.status === 'opłacona').reduce((s, i) => s + i.netProfit, 0)
+  const totalExpenses = monthExpenses.reduce((s, e) => s + e.grossAmount, 0)
+  const netProfit     = totalIncome - totalExpenses
+  const pending       = monthIncomes.filter(i => i.status === 'oczekująca').reduce((s, i) => s + i.netProfit, 0)
+
+  const catMap: Record<string, number> = {}
+  expenses.forEach(e => { catMap[e.category] = (catMap[e.category] ?? 0) + e.grossAmount })
+  const catList = Object.entries(catMap).sort((a, b) => b[1] - a[1])
+
   return (
-    <div className="flex items-center gap-4 px-4 py-3 rounded-xl bg-white/5 hover:bg-white/8 transition-colors">
-      <div className="w-16 text-xs font-semibold text-white/60">{label}</div>
-      <div className="flex-1 grid grid-cols-3 gap-2 text-sm">
-        <div>
-          <div className="text-[10px] text-white/40 mb-0.5">Wpływy</div>
-          <div className="text-green-400 font-medium">{formatCurrency(inflow)}</div>
-        </div>
-        <div>
-          <div className="text-[10px] text-white/40 mb-0.5">Koszty stałe</div>
-          <div className="text-red-400 font-medium">−{formatCurrency(recurring)}</div>
-        </div>
-        <div>
-          <div className="text-[10px] text-white/40 mb-0.5">Bilans</div>
-          <div className={`font-bold ${positive ? 'text-green-400' : 'text-red-400'}`}>
-            {positive ? '+' : ''}{formatCurrency(balance)}
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {[
+          { label: 'Przychód (zysk netto, ten miesiąc)', value: formatPLN(totalIncome), icon: TrendingUp,    color: '#22c55e' },
+          { label: 'Koszty brutto (ten miesiąc)',        value: formatPLN(totalExpenses), icon: TrendingDown, color: '#ef4444' },
+          { label: 'Zysk netto',                         value: formatPLN(netProfit),    icon: DollarSign,   color: netProfit >= 0 ? '#6366f1' : '#ef4444' },
+          { label: 'Oczekujące należności',              value: formatPLN(pending),      icon: Clock,        color: '#f59e0b' },
+        ].map(kpi => (
+          <div key={kpi.label} className="bg-[#16213E] border border-white/[0.07] rounded-[12px] p-4">
+            <div className="w-8 h-8 rounded-[8px] flex items-center justify-center mb-3" style={{ background: kpi.color + '20' }}>
+              <kpi.icon size={15} style={{ color: kpi.color }} />
+            </div>
+            <p className="text-[10px] text-white/40 mb-0.5 leading-tight">{kpi.label}</p>
+            <p className="text-[17px] font-bold text-white">{kpi.value}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* VAT info */}
+      <div className="p-4 rounded-[12px] bg-white/[0.02] border border-white/[0.06]">
+        <p className="text-[11px] font-semibold text-white/40 uppercase tracking-wide mb-2">Logika VAT</p>
+        <p className="text-[11px] text-white/50 leading-relaxed">
+          <span className="text-white/70 font-semibold">VAT 0%</span> → zysk = kwota brutto (bo nie ma podatku)
+          &nbsp;·&nbsp;
+          <span className="text-white/70 font-semibold">VAT {'>'} 0%</span> → zysk = kwota netto (VAT odprowadzany do US)
+        </p>
+      </div>
+
+      {/* Expense breakdown */}
+      {catList.length > 0 ? (
+        <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] p-5">
+          <p className="text-[13px] font-semibold text-white mb-4">Koszty wg kategorii (all time)</p>
+          <div className="space-y-3">
+            {catList.map(([cat, amount]) => {
+              const pct = Math.round((amount / expenses.reduce((s, e) => s + e.grossAmount, 0)) * 100)
+              return (
+                <div key={cat}>
+                  <div className="flex justify-between text-[12px] mb-1">
+                    <span className="text-white/60">{cat}</span>
+                    <span className="text-white font-semibold">{formatPLN(amount)} <span className="text-white/35">({pct}%)</span></span>
+                  </div>
+                  <div className="h-1.5 bg-white/[0.06] rounded-full">
+                    <div className="h-full rounded-full bg-[#6366f1]" style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── Alert Banner ─────────────────────────────────────────────────────────────
-
-function AlertBanner({
-  type,
-  message,
-}: {
-  type: 'error' | 'warning' | 'success'
-  message: string
-}) {
-  const styles = {
-    error: { bg: 'bg-red-500/10 border-red-500/30', text: 'text-red-400', Icon: AlertCircle },
-    warning: { bg: 'bg-yellow-500/10 border-yellow-500/30', text: 'text-yellow-400', Icon: AlertTriangle },
-    success: { bg: 'bg-green-500/10 border-green-500/30', text: 'text-green-400', Icon: Trophy },
-  }
-  const { bg, text, Icon } = styles[type]
-  return (
-    <div className={`flex items-center gap-3 px-4 py-3 rounded-xl border ${bg}`}>
-      <Icon size={15} className={text} />
-      <span className={`text-sm ${text}`}>{message}</span>
-    </div>
-  )
-}
-
-// ─── Main Page ────────────────────────────────────────────────────────────────
-
-export default function FinancePage() {
-  const { income, expenses, loading, fetch: fetchFinance } = useFinance()
-  const [deals, setDeals] = useState<Deal[]>([])
-  const [dealsLoading, setDealsLoading] = useState(false)
-
-  useEffect(() => {
-    fetchFinance()
-    const loadDeals = async () => {
-      setDealsLoading(true)
-      const supabase = createClient()
-      const { data } = await supabase
-        .from('deals')
-        .select('id, stage, value, currency, expected_close_date, project_type')
-        .not('stage', 'in', '("wygrana","przegrana")')
-      setDeals((data as Deal[]) ?? [])
-      setDealsLoading(false)
-    }
-    loadDeals()
-  }, [fetchFinance])
-
-  const now = new Date()
-  const prevMonth = subMonths(now, 1)
-
-  // ── This month vs last month ──────────────────────────────────────────────
-  const thisMonthIncome = useMemo(
-    () => income.filter((i) => isSameMonth(new Date(i.invoice_date ?? i.created_at), now)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [income],
-  )
-  const prevMonthIncome = useMemo(
-    () => income.filter((i) => isSameMonth(new Date(i.invoice_date ?? i.created_at), prevMonth)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [income],
-  )
-  const thisMonthExpenses = useMemo(
-    () => expenses.filter((e) => isSameMonth(new Date(e.expense_date), now)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [expenses],
-  )
-
-  const thisRevenue = thisMonthIncome.reduce((s, i) => s + i.paid_amount, 0)
-  const prevRevenue = prevMonthIncome.reduce((s, i) => s + i.paid_amount, 0)
-  const thisCosts = thisMonthExpenses.reduce((s, e) => s + e.amount, 0)
-  const thisProfit = thisRevenue - thisCosts
-  const revDelta = prevRevenue > 0 ? ((thisRevenue - prevRevenue) / prevRevenue) * 100 : 0
-
-  // ── Pipeline forecast for next month ─────────────────────────────────────
-  const pipelineForecast = useMemo(() => {
-    return deals.reduce((s, d) => {
-      const prob = STAGE_PROB[d.stage] ?? 0
-      return s + (d.value ?? 0) * prob
-    }, 0)
-  }, [deals])
-
-  // ── 12-month P&L chart data ───────────────────────────────────────────────
-  const plChartData = useMemo((): PLMonthData[] => {
-    return Array.from({ length: 12 }, (_, i) => {
-      const monthDate = subMonths(now, 11 - i)
-      const monthStart = startOfMonth(monthDate)
-      const monthEnd = endOfMonth(monthDate)
-      const inRange = (d: Date) => isWithinInterval(d, { start: monthStart, end: monthEnd })
-
-      const revenue = income
-        .filter((item) => inRange(new Date(item.invoice_date ?? item.created_at)))
-        .reduce((s, item) => s + item.paid_amount, 0)
-
-      const expTotal = expenses
-        .filter((item) => inRange(new Date(item.expense_date)))
-        .reduce((s, item) => s + item.amount, 0)
-
-      return {
-        month: format(monthDate, 'MMM', { locale: pl }),
-        revenue,
-        expenses: expTotal,
-        profit: revenue - expTotal,
-      }
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [income, expenses])
-
-  // ── 12-month max revenue (for record detection) ───────────────────────────
-  const maxHistoricRevenue = useMemo(() => {
-    const prev11 = plChartData.slice(0, 11).map((d) => d.revenue)
-    return prev11.length > 0 ? Math.max(...prev11) : 0
-  }, [plChartData])
-
-  // ── Cashflow forecast 30/60/90 days ──────────────────────────────────────
-  const cashflowForecast = useMemo(() => {
-    const today = now
-    const recurringMonthly = expenses
-      .filter((e) => e.is_recurring && e.recurring_frequency === 'monthly')
-      .reduce((s, e) => s + e.amount, 0)
-    const recurringQuarterly = expenses
-      .filter((e) => e.is_recurring && e.recurring_frequency === 'quarterly')
-      .reduce((s, e) => s + e.amount / 3, 0)
-    const recurringYearly = expenses
-      .filter((e) => e.is_recurring && e.recurring_frequency === 'yearly')
-      .reduce((s, e) => s + e.amount / 12, 0)
-    const monthlyFixed = recurringMonthly + recurringQuarterly + recurringYearly
-
-    const pendingIncome = income.filter((i) => i.status === 'oczekujaca')
-
-    const inflowWithin = (days: number) => {
-      const limit = addDays(today, days)
-      const fromPending = pendingIncome
-        .filter((i) => i.due_date && new Date(i.due_date) <= limit)
-        .reduce((s, i) => s + i.amount, 0)
-      const pipelineMonths = days / 30
-      const fromPipeline = pipelineForecast * pipelineMonths
-      return fromPending + fromPipeline
-    }
-
-    const periods = [
-      { label: '30 dni', days: 30 },
-      { label: '60 dni', days: 60 },
-      { label: '90 dni', days: 90 },
-    ]
-
-    return periods.map(({ label, days }) => {
-      const inflow = inflowWithin(days)
-      const recurring = monthlyFixed * (days / 30)
-      return { label, inflow, recurring, balance: inflow - recurring }
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [income, expenses, pipelineForecast])
-
-  // ── Alerts ────────────────────────────────────────────────────────────────
-  const alerts = useMemo(() => {
-    const list: { type: 'error' | 'warning' | 'success'; message: string }[] = []
-
-    if (thisProfit < 15000 && (thisRevenue > 0 || thisCosts > 0)) {
-      list.push({
-        type: 'error',
-        message: `Cashflow poniżej progu minimalnego 15 000 zł — zysk netto ten miesiąc: ${formatCurrency(thisProfit)}`,
-      })
-    }
-
-    const today = now
-    const overdue = income.filter((i) => {
-      if (i.status === 'zalegla') return true
-      if (i.status === 'oczekujaca' && i.due_date) {
-        return differenceInDays(today, new Date(i.due_date)) > 0
-      }
-      return false
-    })
-    if (overdue.length > 0) {
-      const total = overdue.reduce((s, i) => s + i.amount, 0)
-      list.push({
-        type: 'warning',
-        message: `${overdue.length} zaległ${overdue.length === 1 ? 'a faktura' : 'e faktury'} — łącznie ${formatCurrency(total)} do odzyskania`,
-      })
-    }
-
-    if (thisRevenue > 0 && thisRevenue > maxHistoricRevenue && maxHistoricRevenue > 0) {
-      list.push({
-        type: 'success',
-        message: `Rekordowy miesiąc! Przychód ${formatCurrency(thisRevenue)} przekroczył poprzednie maksimum (${formatCurrency(maxHistoricRevenue)})`,
-      })
-    }
-
-    return list
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [thisRevenue, thisCosts, thisProfit, income, maxHistoricRevenue])
-
-  const isLoading = loading || dealsLoading
-
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-white">Dashboard P&amp;L</h1>
-          <p className="text-sm text-white/50 mt-0.5">
-            {format(now, 'LLLL yyyy', { locale: pl })} · {income.length} przychodów · {expenses.length} wydatków
+      ) : (
+        <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] p-8 flex flex-col items-center justify-center gap-3">
+          <DollarSign size={28} className="text-white/15" />
+          <p className="text-[14px] font-semibold text-white/40">Brak danych finansowych</p>
+          <p className="text-[12px] text-white/25 text-center leading-relaxed max-w-xs">
+            Wgraj fakturę lub dodaj ręcznie przychody i koszty aby zobaczyć raport P&L.
           </p>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Income Tab ───────────────────────────────────────────────────────────────
+
+function IncomeTab({
+  incomes, onAdd, onDelete, onInvoice,
+}: {
+  incomes: IncomeEntry[]
+  onAdd: (e: IncomeEntry) => void
+  onDelete: (id: string) => void
+  onInvoice: () => void
+}) {
+  const [showAdd, setShowAdd] = useState(false)
+  const paid    = incomes.filter(i => i.status === 'opłacona').reduce((s, i) => s + i.netProfit, 0)
+  const pending = incomes.filter(i => i.status === 'oczekująca').reduce((s, i) => s + i.netProfit, 0)
+  const overdue = incomes.filter(i => i.status === 'zaległa').reduce((s, i) => s + i.netProfit, 0)
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {[
+          { label: 'Zysk opłacony',    value: paid,    color: '#22c55e' },
+          { label: 'Zysk oczekujący',  value: pending, color: '#f59e0b' },
+          { label: 'Zaległe należności', value: overdue, color: '#ef4444' },
+        ].map(s => (
+          <div key={s.label} className="bg-[#16213E] border border-white/[0.07] rounded-[12px] p-4 flex sm:block items-center justify-between">
+            <p className="text-[11px] text-white/40">{s.label}</p>
+            <p className="text-[18px] font-bold sm:mt-0.5" style={{ color: s.color }}>{formatPLN(s.value)}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] overflow-hidden">
+        <div className="px-4 py-3 border-b border-white/[0.07] flex flex-wrap items-center justify-between gap-2">
+          <p className="text-[13px] font-semibold text-white">Przychody ({incomes.length})</p>
+          <div className="flex items-center gap-2">
+            <button onClick={onInvoice}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] bg-[#6366f1]/10 border border-[#6366f1]/30 text-[#a5b4fc] text-[12px] font-medium hover:bg-[#6366f1]/20 transition-all">
+              <Upload size={12} /> Wgraj fakturę
+            </button>
+            <button onClick={() => setShowAdd(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] bg-white/[0.05] border border-white/[0.09] text-white/55 text-[12px] font-medium hover:bg-white/[0.08] hover:text-white transition-all">
+              <Plus size={12} /> Dodaj ręcznie
+            </button>
+          </div>
+        </div>
+
+        {incomes.length === 0 ? (
+          <div className="py-12 text-center">
+            <p className="text-[13px] text-white/30">Brak przychodów — wgraj fakturę lub dodaj ręcznie</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-white/[0.04]">
+            {incomes.map(inc => {
+              const sc = INCOME_STATUS_CONFIG[inc.status]
+              const StatusIcon = sc.icon
+              return (
+                <div key={inc.id} className="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.02] group">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="text-[13px] font-semibold text-white truncate">{inc.client}</p>
+                      {inc.fromInvoice && <Receipt size={10} className="text-[#6366f1] flex-shrink-0" />}
+                    </div>
+                    <p className="text-[11px] text-white/40 truncate">{inc.project} {inc.invoiceNumber ? `· ${inc.invoiceNumber}` : ''}</p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-[13px] font-bold text-green-400">{formatPLN(inc.netProfit)}</p>
+                    <p className="text-[10px] text-white/30">
+                      {inc.vatRate === 0 ? 'VAT 0%' : `netto ${formatPLN(inc.amount)}`}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <StatusIcon size={12} className={sc.color} />
+                    <span className={`text-[10px] font-semibold hidden sm:block ${sc.color}`}>{sc.label}</span>
+                  </div>
+                  <span className="text-[10px] text-white/30 hidden md:block flex-shrink-0">{formatDate(inc.date)}</span>
+                  <button onClick={() => onDelete(inc.id)} className="p-1 rounded text-white/20 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0">
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+      {showAdd && <AddIncomeModal onClose={() => setShowAdd(false)} onAdd={e => { onAdd(e); toast.success('Przychód dodany') }} />}
+    </div>
+  )
+}
+
+// ─── Expenses Tab ─────────────────────────────────────────────────────────────
+
+function ExpensesTab({
+  expenses, onAdd, onDelete, onInvoice,
+}: {
+  expenses: ExpenseEntry[]
+  onAdd: (e: ExpenseEntry) => void
+  onDelete: (id: string) => void
+  onInvoice: () => void
+}) {
+  const [showAdd, setShowAdd] = useState(false)
+  const totalGross   = expenses.reduce((s, e) => s + e.grossAmount, 0)
+  const totalNet     = expenses.reduce((s, e) => s + e.amount, 0)
+  const recurring    = expenses.filter(e => e.recurring).reduce((s, e) => s + e.grossAmount, 0)
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {[
+          { label: 'Suma brutto (koszty)',  value: totalGross, color: '#ef4444' },
+          { label: 'Suma netto (koszty)',   value: totalNet,   color: '#f97316' },
+          { label: 'Koszty stałe/miesiąc', value: recurring,  color: '#6366f1' },
+        ].map(s => (
+          <div key={s.label} className="bg-[#16213E] border border-white/[0.07] rounded-[12px] p-4 flex sm:block items-center justify-between">
+            <p className="text-[11px] text-white/40">{s.label}</p>
+            <p className="text-[18px] font-bold sm:mt-0.5" style={{ color: s.color }}>{formatPLN(s.value)}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] overflow-hidden">
+        <div className="px-4 py-3 border-b border-white/[0.07] flex flex-wrap items-center justify-between gap-2">
+          <p className="text-[13px] font-semibold text-white">Koszty ({expenses.length})</p>
+          <div className="flex items-center gap-2">
+            <button onClick={onInvoice}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] bg-[#6366f1]/10 border border-[#6366f1]/30 text-[#a5b4fc] text-[12px] font-medium hover:bg-[#6366f1]/20 transition-all">
+              <Upload size={12} /> Wgraj fakturę
+            </button>
+            <button onClick={() => setShowAdd(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] bg-white/[0.05] border border-white/[0.09] text-white/55 text-[12px] font-medium hover:bg-white/[0.08] hover:text-white transition-all">
+              <Plus size={12} /> Dodaj ręcznie
+            </button>
+          </div>
+        </div>
+
+        {expenses.length === 0 ? (
+          <div className="py-12 text-center">
+            <p className="text-[13px] text-white/30">Brak kosztów — wgraj fakturę lub dodaj ręcznie</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-white/[0.04]">
+            {expenses.map(exp => (
+              <div key={exp.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.02] group">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-[12px] font-medium text-white/80 truncate">{exp.name}</p>
+                    {exp.fromInvoice && <Receipt size={10} className="text-[#6366f1] flex-shrink-0" />}
+                  </div>
+                  <p className="text-[10px] text-white/35">{exp.category} {exp.invoiceNumber ? `· ${exp.invoiceNumber}` : ''}</p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="text-[12px] font-semibold text-red-400">{formatPLN(exp.grossAmount)}</p>
+                  <p className="text-[10px] text-white/30">netto {formatPLN(exp.amount)}</p>
+                </div>
+                <span className={`text-[10px] font-semibold flex-shrink-0 ${exp.recurring ? 'text-[#6366f1]' : 'text-white/30'}`}>
+                  {exp.recurring ? 'Cykliczny' : 'Jednorazowy'}
+                </span>
+                <span className="text-[11px] text-white/35 hidden lg:block flex-shrink-0">{formatDate(exp.date)}</span>
+                <button onClick={() => onDelete(exp.id)} className="p-1 rounded text-white/20 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0">
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {showAdd && <AddExpenseModal onClose={() => setShowAdd(false)} onAdd={e => { onAdd(e); toast.success('Koszt dodany') }} />}
+    </div>
+  )
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
+export default function FinancePage() {
+  const [tab, setTab]           = useState<Tab>('overview')
+  const [incomes, setIncomes]   = useState<IncomeEntry[]>([])
+  const [expenses, setExpenses] = useState<ExpenseEntry[]>([])
+  const [showInvoice, setShowInvoice] = useState(false)
+
+  useEffect(() => {
+    setIncomes(loadIncomes())
+    setExpenses(loadExpenses())
+  }, [])
+
+  const addIncome = useCallback((e: IncomeEntry) => {
+    setIncomes(prev => { const next = [e, ...prev]; saveIncomes(next); return next })
+  }, [])
+
+  const addExpense = useCallback((e: ExpenseEntry) => {
+    setExpenses(prev => { const next = [e, ...prev]; saveExpenses(next); return next })
+  }, [])
+
+  const deleteIncome = useCallback((id: string) => {
+    setIncomes(prev => { const next = prev.filter(i => i.id !== id); saveIncomes(next); return next })
+    toast.success('Usunięto')
+  }, [])
+
+  const deleteExpense = useCallback((id: string) => {
+    setExpenses(prev => { const next = prev.filter(e => e.id !== id); saveExpenses(next); return next })
+    toast.success('Usunięto')
+  }, [])
+
+  const TABS: { id: Tab; label: string }[] = [
+    { id: 'overview',  label: 'Przegląd P&L' },
+    { id: 'income',    label: 'Przychody' },
+    { id: 'expenses',  label: 'Koszty' },
+  ]
+
+  return (
+    <div className="max-w-[1200px] space-y-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-[20px] font-bold text-white">Finanse</h1>
+          <p className="text-[12px] text-white/40 mt-0.5">Tracker P&L — przychody, koszty, VAT</p>
+        </div>
         <button
-          onClick={() => { fetchFinance() }}
-          className="p-2 rounded-lg hover:bg-white/10 text-white/40 hover:text-white transition-colors"
-          title="Odśwież"
+          onClick={() => setShowInvoice(true)}
+          className="self-start sm:self-auto flex items-center gap-2 px-4 py-2 rounded-[10px] bg-[#6366f1] hover:bg-[#5254cc] text-white text-[13px] font-semibold transition-all shadow-lg shadow-indigo-500/20"
         >
-          <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} />
+          <Receipt size={14} /> Dodaj fakturę
         </button>
       </div>
 
-      {/* ── 4 Metric Cards ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <MetricCard
-          icon={TrendingUp}
-          label="Przychód (ten miesiąc)"
-          value={formatCurrency(thisRevenue)}
-          sub={
-            prevRevenue > 0
-              ? `${revDelta >= 0 ? '+' : ''}${revDelta.toFixed(0)}% vs ${format(prevMonth, 'MMM', { locale: pl })}`
-              : undefined
-          }
-          subPositive={revDelta >= 0}
-        />
-        <MetricCard
-          icon={TrendingDown}
-          label="Koszty (ten miesiąc)"
-          value={formatCurrency(thisCosts)}
-          sub={`${thisMonthExpenses.length} pozycji`}
-        />
-        <MetricCard
-          icon={DollarSign}
-          label="Zysk netto"
-          value={formatCurrency(thisProfit)}
-          valueColor={thisProfit >= 0 ? 'text-green-400' : 'text-red-400'}
-          sub={thisRevenue > 0 ? `Marża ${Math.round(((thisProfit) / thisRevenue) * 100)}%` : undefined}
-          subPositive={thisProfit >= 0}
-        />
-        <MetricCard
-          icon={Target}
-          label="Prognoza (następny mc)"
-          value={formatCurrency(pipelineForecast)}
-          sub={`${deals.length} dealów w pipeline`}
-          subPositive={pipelineForecast >= 15000}
-        />
+      <div className="flex gap-1 p-1 bg-white/[0.04] rounded-[10px] border border-white/[0.07] w-full sm:w-fit">
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`px-4 py-2 rounded-[8px] text-[13px] font-medium transition-all ${tab === t.id ? 'bg-[#6366f1] text-white shadow-md shadow-indigo-500/20' : 'text-white/50 hover:text-white'}`}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
-      {/* ── P&L Chart ──────────────────────────────────────────────────────── */}
-      <Card>
-        <div className="flex items-center justify-between mb-5">
-          <div>
-            <h2 className="text-sm font-semibold text-white">Przychód vs Koszty — ostatnie 12 miesięcy</h2>
-            <p className="text-xs text-white/40 mt-0.5">Linia docelowa 15k (min) · 25k (cel)</p>
-          </div>
-          <div className="flex items-center gap-4 text-xs text-white/50">
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-green-400 inline-block" />Przychód</span>
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-red-400 inline-block" />Koszty</span>
-          </div>
-        </div>
-        <PLChart data={plChartData} />
-      </Card>
+      {tab === 'overview' && <OverviewTab incomes={incomes} expenses={expenses} />}
+      {tab === 'income'   && <IncomeTab incomes={incomes} onAdd={addIncome} onDelete={deleteIncome} onInvoice={() => setShowInvoice(true)} />}
+      {tab === 'expenses' && <ExpensesTab expenses={expenses} onAdd={addExpense} onDelete={deleteExpense} onInvoice={() => setShowInvoice(true)} />}
 
-      {/* ── Cost Breakdown + Revenue by Type ───────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <Card>
-          <div className="mb-4">
-            <h2 className="text-sm font-semibold text-white">Podział kosztów</h2>
-            <p className="text-xs text-white/40 mt-0.5">{format(now, 'LLLL yyyy', { locale: pl })}</p>
-          </div>
-          <CostPieChart expenses={thisMonthExpenses} />
-        </Card>
-
-        <Card>
-          <div className="mb-4">
-            <h2 className="text-sm font-semibold text-white">Przychód wg typu projektu</h2>
-            <p className="text-xs text-white/40 mt-0.5">Wszystkie faktury</p>
-          </div>
-          <RevenueByTypeChart income={income} />
-        </Card>
-      </div>
-
-      {/* ── Cashflow Forecast ───────────────────────────────────────────────── */}
-      <Card>
-        <div className="mb-4">
-          <h2 className="text-sm font-semibold text-white">Prognoza cashflow</h2>
-          <p className="text-xs text-white/40 mt-0.5">
-            Oczekujące płatności + pipeline × prawdopodobieństwo − koszty stałe
-          </p>
-        </div>
-        <div className="space-y-2">
-          {cashflowForecast.map((row) => (
-            <CashflowRow key={row.label} {...row} />
-          ))}
-        </div>
-        <div className="mt-4 grid grid-cols-3 gap-3">
-          {[
-            {
-              label: 'Oczekujące faktury',
-              value: income.filter((i) => i.status === 'oczekujaca').reduce((s, i) => s + i.amount, 0),
-              count: income.filter((i) => i.status === 'oczekujaca').length,
-              color: 'text-yellow-400',
-            },
-            {
-              label: 'Pipeline (ważony)',
-              value: pipelineForecast,
-              count: deals.length,
-              color: 'text-blue-400',
-            },
-            {
-              label: 'Koszty stałe / mc',
-              value: expenses.filter((e) => e.is_recurring).reduce((s, e) => {
-                const m = e.recurring_frequency === 'quarterly' ? 1 / 3 : e.recurring_frequency === 'yearly' ? 1 / 12 : 1
-                return s + e.amount * m
-              }, 0),
-              count: expenses.filter((e) => e.is_recurring).length,
-              color: 'text-red-400',
-            },
-          ].map((item) => (
-            <div key={item.label} className="bg-white/5 rounded-xl p-3">
-              <div className="text-[10px] text-white/40 mb-1">{item.label}</div>
-              <div className={`text-base font-bold ${item.color}`}>{formatCurrency(item.value)}</div>
-              <div className="text-[10px] text-white/30 mt-0.5">{item.count} pozycji</div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {/* ── Alerts ─────────────────────────────────────────────────────────── */}
-      {alerts.length > 0 && (
-        <div className="space-y-2">
-          <h2 className="text-xs font-semibold text-white/40 uppercase tracking-wider">Alerty</h2>
-          {alerts.map((a, i) => (
-            <AlertBanner key={i} type={a.type} message={a.message} />
-          ))}
-        </div>
+      {showInvoice && (
+        <InvoiceUploadModal
+          onClose={() => setShowInvoice(false)}
+          onAddIncome={e => { addIncome(e); setTab('income') }}
+          onAddExpense={e => { addExpense(e); setTab('expenses') }}
+        />
       )}
     </div>
   )

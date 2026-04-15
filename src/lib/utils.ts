@@ -1,13 +1,10 @@
 import { type ClassValue, clsx } from 'clsx'
+import { twMerge } from 'tailwind-merge'
 import { format, formatDistanceToNow } from 'date-fns'
 
 // ─── Class merging ────────────────────────────────────────────────────────────
 export function cn(...inputs: ClassValue[]) {
-  // Simple merge — install clsx if needed, otherwise just join
-  return inputs
-    .flat()
-    .filter(Boolean)
-    .join(' ')
+  return twMerge(clsx(inputs))
 }
 
 // ─── Currency ─────────────────────────────────────────────────────────────────

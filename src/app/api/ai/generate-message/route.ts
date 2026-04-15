@@ -1,138 +1,81 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getOpenAI } from '@/lib/openai'
+import { getCompanyProfile, buildCompanyContext } from '@/lib/getCompanyProfile'
 import { createClient } from '@/lib/supabase/server'
-
-
-// ─── Per-stage instructions ───────────────────────────────────────────────────
-
-const STAGE_INSTRUCTIONS: Record<string, string> = {
-  connection_request:
-    'Napisz krótką notatkę do zaproszenia LinkedIn (MAKSYMALNIE 280 znaków). Jeden konkretny powód nawiązania kontaktu, bez sprzedawania.',
-  dm1_icebreaker:
-    'Napisz pierwszą DM po zaakceptowaniu zaproszenia. Max 80 słów. Zacznij od spersonalizowanego icebreakera nawiązującego do sygnału zakupowego firmy. Zakończ JEDNYM pytaniem diagnostycznym.',
-  fu1_case_study:
-    'Napisz follow-up z dowodem społecznym. Max 70 słów. Podaj konkretny wynik dla podobnej firmy (możesz wymyślić realistyczne liczby). Zadaj jedno pytanie.',
-  fu2_calendar:
-    'Napisz ostatni follow-up z linkiem do kalendarza. Max 60 słów. Bez presji — to ostatnia wiadomość. Link do kalendarza: https://cal.com/am-automations/discovery',
-  post_offer_48h:
-    'Napisz follow-up 48h po wysłaniu oferty. Max 50 słów. Sprawdź czy dotarła, czy są pytania. Bez presji.',
-  post_offer_5d:
-    'Napisz follow-up 5 dni po ofercie. Max 60 słów. Zaproponuj alternatywę (mniejszy zakres / etapy płatności) jeśli budżet jest problemem.',
-  post_offer_14d:
-    'Napisz ostatni follow-up po 14 dniach. Max 50 słów. Zamknij wątek bez urazy. Zostaw otwarte drzwi.',
-  reengagement_90d:
-    'Napisz wiadomość re-engagement po 90 dniach. Max 80 słów. Nawiąż do poprzedniej rozmowy. Wspomnij o nowym projekcie lub trendzie branżowym. Zapytaj czy coś się zmieniło.',
-}
-
-const SYSTEM_PROMPT = `Jesteś ekspertem od outreach B2B dla AM Automations — polskiej agencji web i automatyzacji.
-
-Co sprzedajemy:
-- Strony z konwersją (2000-5000 PLN)
-- Chatboty AI i automatyzacje (3000-8000 PLN)
-- Systemy wewnętrzne zamiast Exceli (8000-25000 PLN)
-
-Zasady pisania wiadomości:
-- Język: naturalny, ludzki, po polsku
-- NIE używaj buzzwordów: "synergia", "innowacja", "rozwiązanie", "propozycja wartości"
-- Bądź konkretny — nawiązuj do DANYCH firmy, nie pisz generycznie
-- Krótkie akapity (1-2 zdania), format LinkedIn
-- Pierwsze wiadomości: bez emotikon
-- Follow-upy: nie pytaj "czy widziałeś moją poprzednią wiadomość"
-- Zwróć WYŁĄCZNIE treść wiadomości — bez cudzysłowów, nagłówków, komentarzy`
-
-// ─── Handler ─────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   try {
-    const { leadId, dealId, messageType } = (await req.json()) as {
-      leadId: string
-      dealId?: string
-      messageType: string
+    const { leadId, messageType, context } = await req.json()
+
+    const profile = await getCompanyProfile()
+    const companyCtx = buildCompanyContext(profile)
+
+    let lead: Record<string, unknown> | null = null
+    if (leadId) {
+      const supabase = await createClient()
+      const { data } = await supabase.from('leads').select('*').eq('id', leadId).single()
+      lead = data
     }
 
-    if (!leadId || !messageType) {
-      return NextResponse.json({ error: 'leadId and messageType are required' }, { status: 400 })
+    const MESSAGE_TYPE_LABELS: Record<string, string> = {
+      connection_request: 'zaproszenie do znajomych na LinkedIn (max 200 znaków)',
+      dm1_icebreaker: 'pierwsza wiadomość po zaakceptowaniu zaproszenia (personalizacja, problem, propozycja rozmowy)',
+      fu1_case_study: 'follow-up z case study (3 dni po pierwszej wiadomości)',
+      fu2_calendar: 'follow-up z linkiem do kalendarza (8 dni, ostatni)',
+      post_offer_48h: 'follow-up po wysłaniu oferty (48h)',
+      reengagement_90d: 'ponowny kontakt po 90 dniach',
+      custom: 'spersonalizowana wiadomość',
     }
 
-    const supabase = await createClient()
+    const typeLabel = MESSAGE_TYPE_LABELS[messageType] ?? 'wiadomość outreach'
 
-    // Fetch lead
-    const { data: lead, error: leadErr } = await supabase
-      .from('leads')
-      .select('*')
-      .eq('id', leadId)
-      .single()
+    const openai = getOpenAI()
 
-    if (leadErr || !lead) {
-      return NextResponse.json({ error: 'Lead not found' }, { status: 404 })
-    }
-
-    // Fetch deal if provided
-    let deal: Record<string, unknown> | null = null
-    if (dealId) {
-      const { data } = await supabase.from('deals').select('*').eq('id', dealId).single()
-      deal = data
-    }
-
-    // Fetch recent message history for context
-    const { data: history } = await supabase
-      .from('outreach_messages')
-      .select('message_type, message_content, status, created_at')
-      .eq('lead_id', leadId)
-      .order('created_at', { ascending: false })
-      .limit(5)
-
-    // Build lead context
-    const leadCtx = [
-      `Imię: ${lead.first_name}`,
-      `Firma: ${lead.company}`,
-      lead.position && `Stanowisko: ${lead.position}`,
-      lead.segment && `Segment: ${lead.segment}`,
-      lead.industry && `Branża: ${lead.industry}`,
-      lead.ai_score != null && `AI Score: ${lead.ai_score}/10`,
-      lead.ai_problem && `Zidentyfikowany problem: ${lead.ai_problem}`,
-      lead.buying_signal && `Sygnał zakupowy: ${lead.buying_signal}`,
-      lead.website_analysis && `Analiza strony: ${String(lead.website_analysis).slice(0, 300)}`,
-      deal?.client_problem && `Problem klienta (z diagnozy): ${deal.client_problem}`,
-    ]
-      .filter(Boolean)
-      .join('\n')
-
-    const historyCtx = history?.length
-      ? '\n\nHistoria wiadomości (najnowsze):\n' +
-        history
-          .map(
-            (m) =>
-              `[${m.message_type} | ${m.status}]: ${String(m.message_content).slice(0, 120)}`,
-          )
-          .join('\n')
-      : ''
-
-    const instruction =
-      STAGE_INSTRUCTIONS[messageType] ??
-      'Napisz spersonalizowaną wiadomość LinkedIn nawiązującą do kontekstu firmy.'
-
-    const completion = await getOpenAI().chat.completions.create({
+    const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        {
+          role: 'system',
+          content: `Jesteś ekspertem od cold outreach B2B na LinkedIn. Piszesz wiadomości dla:
+
+FIRMA NADAWCY:
+${companyCtx}
+
+Zasady:
+- Wiadomości muszą być krótkie, konkretne, ludzkie
+- Nigdy nie sprzedawaj wprost — zaproś do rozmowy
+- Używaj personalizacji (firma, branża, problem)
+- Ton: ${profile?.tone_of_voice || 'bezpośredni, konkretny, bez korporacyjnego żargonu'}
+
+Odpowiedz TYLKO JSON-em:
+{
+  "message": "<treść wiadomości>",
+  "notes": "<krótka uwaga dlaczego ta wiadomość powinna działać>"
+}`,
+        },
         {
           role: 'user',
-          content: `Typ wiadomości: ${messageType}
-Instrukcja: ${instruction}
+          content: `Napisz: ${typeLabel}
 
-Dane kontaktu:
-${leadCtx}${historyCtx}`,
+Lead:
+${lead ? `Imię: ${lead.first_name} ${lead.last_name}
+Firma: ${lead.company}
+Stanowisko: ${lead.position ?? ''}
+Branża: ${lead.industry ?? ''}
+Sygnał zakupowy: ${lead.buying_signal ?? ''}` : '(brak danych leadu)'}
+
+${context ? `Kontekst dodatkowy: ${context}` : ''}`,
         },
       ],
-      temperature: 0.85,
-      max_tokens: 350,
+      response_format: { type: 'json_object' },
+      max_tokens: 500,
+      temperature: 0.7,
     })
 
-    const message = completion.choices[0]?.message?.content?.trim() ?? ''
-    return NextResponse.json({ message })
+    const result = JSON.parse(completion.choices[0].message.content ?? '{}')
+    return NextResponse.json({ result })
   } catch (err) {
-    console.error('[generate-message]', err)
-    return NextResponse.json({ error: 'Failed to generate message' }, { status: 500 })
+    console.error('generate-message error:', err)
+    return NextResponse.json({ error: 'Błąd generowania wiadomości' }, { status: 500 })
   }
 }

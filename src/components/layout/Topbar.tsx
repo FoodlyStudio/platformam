@@ -12,28 +12,39 @@ import {
 import { useLayout } from './LayoutContext'
 import { SearchModal } from './SearchModal'
 import { NotificationsDropdown, useNotifications } from './NotificationsDropdown'
-import { ThemeToggle } from './ThemeToggle'
+import { BrandThemeSwitcher } from './BrandThemeSwitcher'
+import { useBrandTheme } from '@/contexts/BrandThemeContext'
 import { useAppUser } from '@/contexts/UserContext'
 import { USERS } from '@/lib/userStore'
 import { useRouter } from 'next/navigation'
+import { createClient } from '@/lib/supabase/client'
+
+function useCompanyName() {
+  const [name, setName] = useState<string | null>(null)
+  useEffect(() => {
+    const supabase = createClient()
+    supabase.from('company_profile').select('company_name').limit(1).single()
+      .then(({ data }) => { if (data?.company_name) setName(data.company_name) })
+  }, [])
+  return name
+}
 
 // ─── Breadcrumb map ───────────────────────────────────────────────────────────
 
 const BREADCRUMB_MAP: Record<string, { label: string; parent?: string }> = {
   '/':                      { label: 'Dashboard' },
-  '/sales':                 { label: 'Pipeline',         parent: 'Sprzedaż' },
-  '/sales/leads':           { label: 'Leady',            parent: 'Sprzedaż' },
-  '/sales/leads/import':    { label: 'Import CSV',       parent: 'Leady' },
-  '/sales/outreach':        { label: 'Outreach Queue',   parent: 'Sprzedaż' },
-  '/content':               { label: 'Kalendarz',        parent: 'Content' },
-  '/content/generator':     { label: 'Generator AI',     parent: 'Content' },
-  '/content/bank':          { label: 'Bank szablonów',   parent: 'Content' },
-  '/finance':               { label: 'Dashboard P&L',    parent: 'Finanse' },
-  '/finance/income':        { label: 'Przychody',        parent: 'Finanse' },
-  '/finance/expenses':      { label: 'Wydatki',          parent: 'Finanse' },
-  '/analytics/segments':    { label: 'Segmenty',         parent: 'Analityka' },
-  '/analytics/win-loss':    { label: 'Win / Loss',       parent: 'Analityka' },
-  '/analytics/forecast':    { label: 'Revenue Forecast', parent: 'Analityka' },
+  '/demo':                  { label: 'Dashboard' },
+  '/knowledge-base':        { label: 'Baza Wiedzy' },
+  '/pipeline':              { label: 'Pipeline (CRM)',    parent: 'Sprzedaż' },
+  '/leads':                 { label: 'Leady',             parent: 'Sprzedaż' },
+  '/outreach':              { label: 'Outreach',          parent: 'Sprzedaż' },
+  '/ai-scoring':            { label: 'AI Scoring',        parent: 'Sprzedaż' },
+  '/content-generator':     { label: 'Generator Treści',  parent: 'Content' },
+  '/content-calendar':      { label: 'Kalendarz Contentu',parent: 'Content' },
+  '/finance':               { label: 'Finanse',           parent: 'Finanse & Raporty' },
+  '/analytics':             { label: 'Analityka',         parent: 'Finanse & Raporty' },
+  '/portal':                { label: 'Portal Klienta',    parent: 'Klient' },
+  '/offer-generator':       { label: 'Generator Ofert',   parent: 'Klient' },
   '/settings':              { label: 'Ustawienia' },
   '/notifications':         { label: 'Powiadomienia' },
 }
@@ -65,10 +76,10 @@ function useBreadcrumbs() {
 
 // ─── Avatar dropdown ──────────────────────────────────────────────────────────
 
-function AvatarDropdown({ onClose }: { onClose: () => void }) {
-  const { user, switchUser, logout } = useAppUser()
+function AvatarDropdown({ onClose, companyName }: { onClose: () => void; companyName: string | null }) {
+  const { user, logout } = useAppUser()
   const router = useRouter()
-  const otherUsers = USERS.filter((u) => u.id !== user?.id)
+  const { brandTheme } = useBrandTheme()
 
   const handleLogout = () => {
     logout()
@@ -77,40 +88,31 @@ function AvatarDropdown({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="absolute right-0 top-full mt-2 w-[220px] bg-[#0F0F1A] border border-white/10 rounded-[12px] shadow-2xl shadow-black/50 overflow-hidden z-50 py-1">
+    <div className="absolute right-0 top-full mt-2 w-[220px] sm:w-[240px] bg-[#0F0F1A] border border-white/10 rounded-[12px] shadow-2xl shadow-black/50 overflow-hidden z-50 py-1">
       <div className="px-3 py-2.5 border-b border-white/[0.07] mb-1">
-        <p className="text-[13px] font-medium text-white">{user?.name}</p>
-        <p className="text-[11px] text-white/35">AM Automations</p>
+        <p className="text-[13px] font-medium text-white">{(user as any)?.fullName ?? user?.name}</p>
+        <p className="text-[11px] text-white/35">{brandTheme === 'mediovee' ? 'Mediovee' : (companyName ?? 'Moja Agencja')}</p>
       </div>
-
-      {otherUsers.map((u) => (
-        <button
-          key={u.id}
-          onClick={() => { switchUser(u.id); onClose() }}
-          className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-white/55 hover:text-white hover:bg-white/[0.05] transition-colors"
-        >
-          <span className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold"
-            style={{ background: u.color + '30', color: u.color }}>
-            {u.initials[0]}
-          </span>
-          Przełącz na {u.name}
-        </button>
-      ))}
-
-      <Link
-        href="/settings"
-        onClick={onClose}
-        className="flex items-center px-3 py-2 text-[13px] text-white/55 hover:text-white hover:bg-white/[0.05] transition-colors"
-      >
-        Ustawienia
-      </Link>
+      <div className="px-3 py-1.5">
+        <span className="text-[10px] text-white/20 uppercase tracking-widest font-semibold">Wersja demonstracyjna</span>
+      </div>
       <div className="border-t border-white/[0.07] mt-1 pt-1">
         <button
           onClick={handleLogout}
-          className="w-full flex items-center px-3 py-2 text-[13px] text-red-400/80 hover:text-red-400 hover:bg-red-400/[0.08] transition-colors"
+          className="w-full flex items-center px-3 py-2 text-[13px] text-white/55 hover:text-white hover:bg-white/[0.05] transition-colors"
         >
-          Zmień użytkownika
+          Wyloguj
         </button>
+      </div>
+      <div className="border-t border-white/[0.07] mt-1 pt-2 pb-1 px-3">
+        <a
+          href="https://amautomations.pl"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[11px] text-[#6366f1]/70 hover:text-[#6366f1] transition-colors"
+        >
+          Chcę wdrożyć w swojej agencji →
+        </a>
       </div>
     </div>
   )
@@ -129,6 +131,8 @@ export function Topbar() {
 
   const { unreadCount } = useNotifications()
   const { user: appUser } = useAppUser()
+  const companyName = useCompanyName()
+  const { brandTheme } = useBrandTheme()
 
   const notifRef  = useRef<HTMLDivElement>(null)
   const avatarRef = useRef<HTMLDivElement>(null)
@@ -167,7 +171,7 @@ export function Topbar() {
 
       <header
         className={`
-          h-14 sticky top-0 z-30 flex items-center justify-between px-5
+          h-14 sticky top-0 z-30 flex items-center justify-between px-3 sm:px-5
           bg-[#1A1A2E]/90 backdrop-blur-md border-b border-white/[0.06]
           transition-all duration-200
         `}
@@ -228,8 +232,8 @@ export function Topbar() {
             </span>
           </button>
 
-          {/* Theme toggle */}
-          <ThemeToggle />
+          {/* Brand theme switcher */}
+          <BrandThemeSwitcher />
 
           {/* Mobile search icon */}
           <button
@@ -278,11 +282,16 @@ export function Topbar() {
               >
                 {appUser?.initials ?? 'AM'}
               </div>
-              <span className="hidden sm:block text-[13px] text-white/60 font-medium max-w-[100px] truncate">
-                {appUser?.name ?? 'AM'}
-              </span>
+              <div className="hidden sm:flex flex-col items-start">
+                <span className="text-[12px] text-white/80 font-medium leading-tight truncate max-w-[130px]">
+                  {(appUser as any)?.fullName ?? appUser?.name ?? 'Anna Kowalska'}
+                </span>
+                <span className="text-[10px] text-white/35 leading-tight">
+                  {brandTheme === 'mediovee' ? 'Mediovee' : ((appUser as any)?.company ?? companyName ?? 'Moja Agencja')}
+                </span>
+              </div>
             </button>
-            {avatarOpen && <AvatarDropdown onClose={() => setAvatarOpen(false)} />}
+            {avatarOpen && <AvatarDropdown onClose={() => setAvatarOpen(false)} companyName={companyName} />}
           </div>
         </div>
       </header>
