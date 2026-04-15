@@ -9,6 +9,7 @@ import {
   Send, StickyNote, ChevronDown,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { createClient } from '@/lib/supabase/client'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -38,9 +39,61 @@ interface Lead {
   outreachHistory: { date: string; type: string; content: string }[]
 }
 
-// ─── LocalStorage helpers ─────────────────────────────────────────────────────
+// ─── Supabase helpers ─────────────────────────────────────────────────────────
 
-const LS_LEADS_KEY = 'agencyos_leads'
+function dbToLead(row: Record<string, unknown>): Lead {
+  return {
+    id: row.id as string,
+    firstName: row.first_name as string,
+    lastName: row.last_name as string,
+    company: row.company as string,
+    position: (row.position as string) ?? '',
+    email: (row.email as string) ?? '',
+    phone: (row.phone as string) ?? '',
+    city: (row.city as string) ?? '',
+    segment: (row.segment as string) ?? 'usługi',
+    aiScore: (row.ai_score_num as number) ?? 50,
+    aiLabel: ((row.ai_score_label as string) ?? 'warm') as AiScore,
+    status: ((row.app_status as string) ?? 'nowy') as Lead['status'],
+    lastContact: (row.last_contact as string) ?? new Date().toISOString().slice(0, 10),
+    problem: (row.problem as string) ?? '',
+    icebreaker: (row.icebreaker as string) ?? '',
+    website: (row.website as string) ?? undefined,
+    linkedin: (row.linkedin_url as string) ?? undefined,
+    instagram: (row.instagram_url as string) ?? undefined,
+    notes: (row.notes as string) ?? undefined,
+    scanData: (row.scan_data as string) ?? undefined,
+    outreachHistory: (row.outreach_history as Lead['outreachHistory']) ?? [],
+  }
+}
+
+function leadToDb(lead: Lead) {
+  return {
+    first_name: lead.firstName,
+    last_name: lead.lastName,
+    company: lead.company,
+    position: lead.position,
+    email: lead.email,
+    phone: lead.phone,
+    city: lead.city,
+    segment: lead.segment,
+    ai_score_num: lead.aiScore,
+    ai_score_label: lead.aiLabel,
+    app_status: lead.status,
+    last_contact: lead.lastContact,
+    problem: lead.problem,
+    icebreaker: lead.icebreaker,
+    website: lead.website ?? null,
+    linkedin_url: lead.linkedin ?? null,
+    instagram_url: lead.instagram ?? null,
+    notes: lead.notes ?? null,
+    scan_data: lead.scanData ?? null,
+    outreach_history: lead.outreachHistory,
+  }
+}
+
+// ─── LocalStorage helpers (segments only) ────────────────────────────────────
+
 const LS_SEGMENTS_KEY = 'agencyos_segments'
 
 const DEFAULT_SEGMENTS = [
@@ -53,17 +106,6 @@ const DEFAULT_SEGMENT_LABELS: Record<string, string> = {
   ecommerce: 'E-commerce', restauracje: 'Restauracje',
   kancelarie: 'Kancelarie', nieruchomości: 'Nieruchomości',
   szkolenia: 'Szkolenia', hotele: 'Hotele', it: 'IT / Tech', usługi: 'Usługi',
-}
-
-function loadLeads(): Lead[] {
-  try {
-    const raw = localStorage.getItem(LS_LEADS_KEY)
-    return raw ? JSON.parse(raw) : []
-  } catch { return [] }
-}
-
-function saveLeads(leads: Lead[]) {
-  localStorage.setItem(LS_LEADS_KEY, JSON.stringify(leads))
 }
 
 function loadSegments(): { keys: string[]; labels: Record<string, string> } {
@@ -213,10 +255,11 @@ function SegmentCombobox({
 // ─── New Lead Modal ───────────────────────────────────────────────────────────
 
 function NewLeadModal({
-  onClose, onAdd, segments, segmentLabels, onAddSegment,
+  onClose, onAdd, onUpdate, segments, segmentLabels, onAddSegment,
 }: {
   onClose: () => void
-  onAdd: (lead: Lead) => void
+  onAdd: (lead: Lead) => Promise<Lead>
+  onUpdate: (lead: Lead) => void
   segments: string[]
   segmentLabels: Record<string, string>
   onAddSegment: (key: string, label: string) => void
@@ -257,8 +300,8 @@ function NewLeadModal({
       outreachHistory: [],
     }
 
-    onAdd(lead)
     setSaved(true)
+    const savedLead = await onAdd(lead)
 
     // Trigger AI scoring in background
     setScanning(true)
@@ -268,10 +311,10 @@ function NewLeadModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           leadData: {
-            first_name: lead.firstName,
-            last_name: lead.lastName,
-            company: lead.company,
-            position: lead.position,
+            first_name: savedLead.firstName,
+            last_name: savedLead.lastName,
+            company: savedLead.company,
+            position: savedLead.position,
             industry: form.segment,
             linkedin_url: form.linkedin,
             company_website: form.website,
@@ -284,17 +327,14 @@ function NewLeadModal({
         const { result } = await res.json()
         if (result) {
           const updatedLead: Lead = {
-            ...lead,
+            ...savedLead,
             aiScore: result.total_score ?? 50,
             aiLabel: result.label ?? 'warm',
             problem: result.problem ?? '',
             icebreaker: result.icebreaker ?? '',
           }
-          // Update in storage
-          const stored = loadLeads()
-          const idx = stored.findIndex(l => l.id === lead.id)
-          if (idx !== -1) { stored[idx] = updatedLead; saveLeads(stored) }
-          toast.success(`Lead ${lead.firstName} ${lead.lastName} oceniony: ${result.total_score}/100`)
+          onUpdate(updatedLead)
+          toast.success(`Lead ${savedLead.firstName} ${savedLead.lastName} oceniony: ${result.total_score}/100`)
         }
       }
     } catch {
@@ -877,26 +917,32 @@ export default function LeadsPage() {
   const [showNewLead, setShowNewLead] = useState(false)
 
   useEffect(() => {
-    setLeads(loadLeads())
+    const supabase = createClient()
+    supabase.from('leads').select('*').order('last_contact', { ascending: false }).then(({ data }) => {
+      if (data) setLeads(data.map(r => dbToLead(r as Record<string, unknown>)))
+    })
     const { keys, labels } = loadSegments()
     setSegments(keys)
     setSegmentLabels(labels)
   }, [])
 
-  const addLead = useCallback((lead: Lead) => {
-    setLeads(prev => {
-      const next = [lead, ...prev]
-      saveLeads(next)
-      return next
-    })
+  const addLead = useCallback(async (lead: Lead): Promise<Lead> => {
+    const supabase = createClient()
+    const { data, error } = await supabase.from('leads').insert(leadToDb(lead)).select().single()
+    if (!error && data) {
+      const saved = dbToLead(data as Record<string, unknown>)
+      setLeads(prev => [saved, ...prev])
+      return saved
+    }
+    // fallback: add with client id
+    setLeads(prev => [lead, ...prev])
+    return lead
   }, [])
 
-  const updateLead = useCallback((updated: Lead) => {
-    setLeads(prev => {
-      const next = prev.map(l => l.id === updated.id ? updated : l)
-      saveLeads(next)
-      return next
-    })
+  const updateLead = useCallback(async (updated: Lead) => {
+    const supabase = createClient()
+    await supabase.from('leads').update(leadToDb(updated)).eq('id', updated.id)
+    setLeads(prev => prev.map(l => l.id === updated.id ? updated : l))
     setSelected(updated)
   }, [])
 
@@ -1067,6 +1113,7 @@ export default function LeadsPage() {
         <NewLeadModal
           onClose={() => setShowNewLead(false)}
           onAdd={addLead}
+          onUpdate={updateLead}
           segments={segments}
           segmentLabels={segmentLabels}
           onAddSegment={handleAddSegment}

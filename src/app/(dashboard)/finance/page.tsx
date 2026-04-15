@@ -2,12 +2,13 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import {
-  TrendingUp, TrendingDown, DollarSign, Target,
+  TrendingUp, TrendingDown, DollarSign,
   CheckCircle2, Clock, AlertTriangle, X, Plus,
   Upload, Loader2, FileText, Receipt, Trash2,
   ArrowUpCircle, ArrowDownCircle, Sparkles,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { createClient } from '@/lib/supabase/client'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -46,15 +47,41 @@ interface ExpenseEntry {
 
 type Tab = 'overview' | 'income' | 'expenses'
 
-// ─── LocalStorage ─────────────────────────────────────────────────────────────
+// ─── Supabase helpers ─────────────────────────────────────────────────────────
 
-const LS_INCOMES   = 'agencyos_incomes'
-const LS_EXPENSES  = 'agencyos_expenses'
+function dbToIncome(row: Record<string, unknown>): IncomeEntry {
+  return {
+    id: row.id as string,
+    client: row.client as string,
+    project: row.project as string,
+    amount: row.amount as number,
+    vatRate: row.vat_rate as number,
+    vatAmount: row.vat_amount as number,
+    grossAmount: row.gross_amount as number,
+    netProfit: row.net_profit as number,
+    type: row.type as IncomeType,
+    status: row.status as IncomeStatus,
+    date: row.date as string,
+    invoiceNumber: (row.invoice_number as string) ?? undefined,
+    fromInvoice: (row.from_invoice as boolean) ?? undefined,
+  }
+}
 
-function loadIncomes(): IncomeEntry[]  { try { return JSON.parse(localStorage.getItem(LS_INCOMES)  ?? '[]') } catch { return [] } }
-function loadExpenses(): ExpenseEntry[] { try { return JSON.parse(localStorage.getItem(LS_EXPENSES) ?? '[]') } catch { return [] } }
-function saveIncomes(d: IncomeEntry[])  { localStorage.setItem(LS_INCOMES,  JSON.stringify(d)) }
-function saveExpenses(d: ExpenseEntry[]) { localStorage.setItem(LS_EXPENSES, JSON.stringify(d)) }
+function dbToExpense(row: Record<string, unknown>): ExpenseEntry {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    category: row.category as string,
+    amount: row.amount as number,
+    vatRate: row.vat_rate as number,
+    vatAmount: row.vat_amount as number,
+    grossAmount: row.gross_amount as number,
+    recurring: row.recurring as boolean,
+    date: row.date as string,
+    invoiceNumber: (row.invoice_number as string) ?? undefined,
+    fromInvoice: (row.from_invoice as boolean) ?? undefined,
+  }
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -780,25 +807,69 @@ export default function FinancePage() {
   const [showInvoice, setShowInvoice] = useState(false)
 
   useEffect(() => {
-    setIncomes(loadIncomes())
-    setExpenses(loadExpenses())
+    const supabase = createClient()
+    const load = async () => {
+      const [{ data: inc }, { data: exp }] = await Promise.all([
+        supabase.from('app_income').select('*').order('date', { ascending: false }),
+        supabase.from('app_expenses').select('*').order('date', { ascending: false }),
+      ])
+      if (inc) setIncomes(inc.map(r => dbToIncome(r as Record<string, unknown>)))
+      if (exp) setExpenses(exp.map(r => dbToExpense(r as Record<string, unknown>)))
+    }
+    load()
   }, [])
 
-  const addIncome = useCallback((e: IncomeEntry) => {
-    setIncomes(prev => { const next = [e, ...prev]; saveIncomes(next); return next })
+  const addIncome = useCallback(async (e: IncomeEntry) => {
+    const supabase = createClient()
+    const { data, error } = await supabase.from('app_income').insert({
+      client: e.client,
+      project: e.project,
+      amount: e.amount,
+      vat_rate: e.vatRate,
+      vat_amount: e.vatAmount,
+      gross_amount: e.grossAmount,
+      net_profit: e.netProfit,
+      type: e.type,
+      status: e.status,
+      date: e.date,
+      invoice_number: e.invoiceNumber ?? null,
+      from_invoice: e.fromInvoice ?? false,
+    }).select().single()
+    if (!error && data) {
+      setIncomes(prev => [dbToIncome(data as Record<string, unknown>), ...prev])
+    }
   }, [])
 
-  const addExpense = useCallback((e: ExpenseEntry) => {
-    setExpenses(prev => { const next = [e, ...prev]; saveExpenses(next); return next })
+  const addExpense = useCallback(async (e: ExpenseEntry) => {
+    const supabase = createClient()
+    const { data, error } = await supabase.from('app_expenses').insert({
+      name: e.name,
+      category: e.category,
+      amount: e.amount,
+      vat_rate: e.vatRate,
+      vat_amount: e.vatAmount,
+      gross_amount: e.grossAmount,
+      recurring: e.recurring,
+      date: e.date,
+      invoice_number: e.invoiceNumber ?? null,
+      from_invoice: e.fromInvoice ?? false,
+    }).select().single()
+    if (!error && data) {
+      setExpenses(prev => [dbToExpense(data as Record<string, unknown>), ...prev])
+    }
   }, [])
 
-  const deleteIncome = useCallback((id: string) => {
-    setIncomes(prev => { const next = prev.filter(i => i.id !== id); saveIncomes(next); return next })
+  const deleteIncome = useCallback(async (id: string) => {
+    const supabase = createClient()
+    await supabase.from('app_income').delete().eq('id', id)
+    setIncomes(prev => prev.filter(i => i.id !== id))
     toast.success('Usunięto')
   }, [])
 
-  const deleteExpense = useCallback((id: string) => {
-    setExpenses(prev => { const next = prev.filter(e => e.id !== id); saveExpenses(next); return next })
+  const deleteExpense = useCallback(async (id: string) => {
+    const supabase = createClient()
+    await supabase.from('app_expenses').delete().eq('id', id)
+    setExpenses(prev => prev.filter(e => e.id !== id))
     toast.success('Usunięto')
   }, [])
 
