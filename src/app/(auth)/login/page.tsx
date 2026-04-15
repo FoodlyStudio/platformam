@@ -47,24 +47,17 @@ export default function LoginPage() {
           <div className="w-7 h-7 rounded-[8px] bg-gradient-to-br from-[#6366f1] to-[#8b5cf6] flex items-center justify-center shadow-lg shadow-indigo-500/25">
             <Zap size={13} className="text-white" strokeWidth={2.5} />
           </div>
-          <span className="text-[14px] font-bold text-white tracking-tight">AgencyOS</span>
+          <span className="text-[14px] font-bold text-white tracking-tight">System H14</span>
         </div>
       </div>
 
       <div className="flex-1 flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-[400px]">
 
-          <div className="flex justify-center mb-6">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#6366f1]/15 border border-[#6366f1]/30 text-[#a5b4fc] text-[11px] font-semibold tracking-wide uppercase">
-              <div className="w-1.5 h-1.5 rounded-full bg-[#6366f1] animate-pulse" />
-              Demo klienta · 7 dni
-            </span>
-          </div>
-
           <div className="text-center mb-8">
-            <h1 className="text-[28px] font-bold text-white tracking-tight mb-2">Witaj w AgencyOS</h1>
+            <h1 className="text-[28px] font-bold text-white tracking-tight mb-2">System H14</h1>
             <p className="text-[14px] text-white/45 leading-relaxed">
-              Wybierz swój profil i wpisz hasło<br />aby wejść do platformy.
+              Wybierz swój profil i wpisz hasło<br />aby wejść do systemu.
             </p>
           </div>
 

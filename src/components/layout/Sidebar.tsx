@@ -187,10 +187,10 @@ function SidebarContent({ collapsed, onNavClick, showCloseButton, onClose }: Sid
         {!collapsed && (
           <div className="flex-1 min-w-0">
             <p className="text-[13px] font-bold text-white tracking-tight leading-none">
-              {isMediovee ? 'Mediovee' : 'AgencyOS'}
+              {isMediovee ? 'Mediovee' : 'System H14'}
             </p>
             <p className="text-[10px] text-white/35 mt-0.5 tracking-wide uppercase">
-              {isMediovee ? 'Platform' : 'by Kreativa Marketing'}
+              {isMediovee ? 'Platform' : 'AM Automations'}
             </p>
           </div>
         )}
@@ -248,7 +248,7 @@ function SidebarContent({ collapsed, onNavClick, showCloseButton, onClose }: Sid
         {!collapsed && (
           <div className="px-3 pt-2 pb-1">
             <p className="text-[9px] text-white/20 leading-relaxed">
-              Demo przygotowane przez{' '}
+              System H14 ·{' '}
               <span className="text-white/35">AM Automations</span>
               {' · '}
               <a
