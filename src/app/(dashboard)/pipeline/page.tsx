@@ -1,19 +1,59 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   Flame, Thermometer, Snowflake, X, Phone, Mail, Calendar,
-  FileText, MessageSquare, ChevronRight, DollarSign, TrendingUp,
-  User, Building2, Tag, CheckCircle2,
+  FileText, MessageSquare, DollarSign, User, Building2, Tag, CheckCircle2,
+  Loader2, AlertCircle,
 } from 'lucide-react'
-import { STAGE_CONFIG, type Deal, type DealStage } from '@/lib/mock-data/deals'
+import { createClient } from '@/lib/supabase/client'
 
-// ─── Stage order ─────────────────────────────────────────────────────────────
+// ─── Stage config (keys match DB values) ─────────────────────────────────────
+
+export type DealStage =
+  | 'nowy_lead' | 'dm_wyslany' | 'odpowiedz' | 'rozmowa_umowiona'
+  | 'diagnoza_zrobiona' | 'oferta_prezentowana' | 'negocjacje'
+  | 'wygrana' | 'przegrana' | 'nie_teraz'
+
+export const STAGE_CONFIG: Record<DealStage, { label: string; color: string; bg: string }> = {
+  nowy_lead:            { label: 'Nowy lead',           color: '#94a3b8', bg: 'rgba(148,163,184,0.1)' },
+  dm_wyslany:           { label: 'DM wysłany',          color: '#60a5fa', bg: 'rgba(96,165,250,0.1)' },
+  odpowiedz:            { label: 'Odpowiedź',           color: '#a78bfa', bg: 'rgba(167,139,250,0.1)' },
+  rozmowa_umowiona:     { label: 'Rozmowa umówiona',    color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' },
+  diagnoza_zrobiona:    { label: 'Diagnoza zrobiona',   color: '#fb923c', bg: 'rgba(251,146,60,0.1)' },
+  oferta_prezentowana:  { label: 'Oferta prezentowana', color: '#6366f1', bg: 'rgba(99,102,241,0.1)' },
+  negocjacje:           { label: 'Negocjacje',          color: '#ec4899', bg: 'rgba(236,72,153,0.1)' },
+  wygrana:              { label: 'WYGRANA',             color: '#22c55e', bg: 'rgba(34,197,94,0.12)' },
+  przegrana:            { label: 'PRZEGRANA',           color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
+  nie_teraz:            { label: 'NIE TERAZ',           color: '#64748b', bg: 'rgba(100,116,139,0.1)' },
+}
 
 const STAGE_ORDER: DealStage[] = [
-  'nowy-lead', 'dm-wyslany', 'odpowiedz', 'rozmowa-umowiona',
-  'diagnoza', 'oferta', 'negocjacje', 'wygrana', 'przegrana', 'nie-teraz',
+  'nowy_lead', 'dm_wyslany', 'odpowiedz', 'rozmowa_umowiona',
+  'diagnoza_zrobiona', 'oferta_prezentowana', 'negocjacje',
+  'wygrana', 'przegrana', 'nie_teraz',
 ]
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface Deal {
+  id: string
+  title: string
+  contact_name: string | null
+  contact_email: string | null
+  contact_phone: string | null
+  contact_position: string | null
+  contact_segment: string | null
+  value: number
+  stage: DealStage
+  ai_score_label: 'hot' | 'warm' | 'cold'
+  ai_score_num: number
+  last_contact_date: string
+  next_step: string | null
+  project_scope: string | null
+  notes: string | null
+  assigned_to: string | null
+}
 
 // ─── Badge helpers ────────────────────────────────────────────────────────────
 
@@ -37,7 +77,9 @@ function relativeDate(iso: string) {
 // ─── Deal Card ────────────────────────────────────────────────────────────────
 
 function DealCard({ deal, onClick }: { deal: Deal; onClick: () => void }) {
-  const initials = deal.contactName.split(' ').map(n => n[0]).join('').slice(0, 2)
+  const displayName = deal.contact_name || deal.title
+  const initials = displayName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
+
   return (
     <button
       onClick={onClick}
@@ -49,15 +91,15 @@ function DealCard({ deal, onClick }: { deal: Deal; onClick: () => void }) {
             {initials}
           </div>
           <div className="min-w-0">
-            <p className="text-[12px] font-semibold text-white truncate leading-tight">{deal.contactName}</p>
-            <p className="text-[10px] text-white/40 truncate">{deal.company}</p>
+            <p className="text-[12px] font-semibold text-white truncate leading-tight">{displayName}</p>
+            <p className="text-[10px] text-white/40 truncate">{deal.title}</p>
           </div>
         </div>
-        <ScoreBadge score={deal.aiScore} />
+        <ScoreBadge score={deal.ai_score_label} />
       </div>
       <div className="flex items-center justify-between mt-2">
         <span className="text-[11px] font-semibold text-[#6366f1]">{formatPLN(deal.value)}</span>
-        <span className="text-[10px] text-white/30">{relativeDate(deal.lastContact)}</span>
+        <span className="text-[10px] text-white/30">{relativeDate(deal.last_contact_date)}</span>
       </div>
     </button>
   )
@@ -65,23 +107,39 @@ function DealCard({ deal, onClick }: { deal: Deal; onClick: () => void }) {
 
 // ─── Deal Detail Modal ────────────────────────────────────────────────────────
 
-function DealModal({ deal, onClose }: { deal: Deal; onClose: () => void }) {
+function DealModal({
+  deal,
+  onClose,
+  onStageChange,
+}: {
+  deal: Deal
+  onClose: () => void
+  onStageChange: (id: string, stage: DealStage) => Promise<void>
+}) {
   const stage = STAGE_CONFIG[deal.stage]
-  const initials = deal.contactName.split(' ').map(n => n[0]).join('').slice(0, 2)
+  const displayName = deal.contact_name || deal.title
+  const initials = displayName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
+  const [saving, setSaving] = useState(false)
+
+  const handleStageChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSaving(true)
+    await onStageChange(deal.id, e.target.value as DealStage)
+    setSaving(false)
+    onClose()
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-end">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div className="relative z-10 w-full sm:max-w-[480px] h-full bg-[#0F0F1A] sm:border-l border-white/[0.08] overflow-y-auto shadow-2xl">
-        {/* Header */}
         <div className="sticky top-0 bg-[#0F0F1A]/95 backdrop-blur border-b border-white/[0.07] p-5 flex items-start justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-[12px] bg-[#6366f1]/20 flex items-center justify-center text-[14px] font-bold text-[#6366f1]">
               {initials}
             </div>
             <div>
-              <p className="text-[15px] font-bold text-white">{deal.contactName}</p>
-              <p className="text-[12px] text-white/40">{deal.company} · {deal.position}</p>
+              <p className="text-[15px] font-bold text-white">{displayName}</p>
+              <p className="text-[12px] text-white/40">{deal.title} · {deal.contact_position || '—'}</p>
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-[8px] text-white/40 hover:text-white hover:bg-white/[0.06] transition-all">
@@ -90,16 +148,30 @@ function DealModal({ deal, onClose }: { deal: Deal; onClose: () => void }) {
         </div>
 
         <div className="p-5 space-y-5">
-          {/* Stage + Score */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold" style={{ background: stage.bg, color: stage.color }}>
-              {stage.label}
-            </span>
-            <ScoreBadge score={deal.aiScore} />
-            <span className="text-[11px] text-white/40">Score: {deal.aiScoreNum}/100</span>
+          {/* Stage change */}
+          <div>
+            <p className="text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-2">Etap pipeline</p>
+            <div className="flex items-center gap-2">
+              <select
+                value={deal.stage}
+                onChange={handleStageChange}
+                disabled={saving}
+                className="flex-1 px-3 py-2 rounded-[8px] bg-[#1A1A2E] border border-white/[0.1] text-white text-[13px] focus:outline-none focus:border-[#6366f1]/50 transition-all disabled:opacity-60"
+              >
+                {STAGE_ORDER.map(s => (
+                  <option key={s} value={s}>{STAGE_CONFIG[s].label}</option>
+                ))}
+              </select>
+              {saving && <Loader2 size={15} className="text-[#6366f1] animate-spin flex-shrink-0" />}
+            </div>
           </div>
 
-          {/* Value */}
+          {/* Score + value */}
+          <div className="flex items-center gap-2">
+            <ScoreBadge score={deal.ai_score_label} />
+            <span className="text-[11px] text-white/40">Score: {deal.ai_score_num}/100</span>
+          </div>
+
           <div className="flex items-center gap-2 p-3 rounded-[10px] bg-white/[0.03] border border-white/[0.06]">
             <DollarSign size={15} className="text-[#6366f1]" />
             <div>
@@ -113,11 +185,11 @@ function DealModal({ deal, onClose }: { deal: Deal; onClose: () => void }) {
             <p className="text-[11px] font-semibold text-white/40 uppercase tracking-wide">Dane kontaktowe</p>
             <div className="grid grid-cols-1 gap-2">
               {[
-                { icon: User, label: deal.position },
-                { icon: Building2, label: deal.company },
-                { icon: Mail, label: deal.email },
-                { icon: Phone, label: deal.phone },
-                { icon: Tag, label: deal.segment },
+                { icon: User,     label: deal.contact_position || '—' },
+                { icon: Building2,label: deal.title },
+                { icon: Mail,     label: deal.contact_email || '—' },
+                { icon: Phone,    label: deal.contact_phone || '—' },
+                { icon: Tag,      label: deal.contact_segment || '—' },
               ].map((item, i) => (
                 <div key={i} className="flex items-center gap-2 text-[12px]">
                   <item.icon size={13} className="text-white/30 flex-shrink-0" />
@@ -128,46 +200,32 @@ function DealModal({ deal, onClose }: { deal: Deal; onClose: () => void }) {
           </div>
 
           {/* Scope */}
-          <div className="p-3 rounded-[10px] bg-white/[0.03] border border-white/[0.06]">
-            <p className="text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1">Zakres projektu</p>
-            <p className="text-[13px] text-white/75">{deal.projectScope}</p>
-          </div>
+          {deal.project_scope && (
+            <div className="p-3 rounded-[10px] bg-white/[0.03] border border-white/[0.06]">
+              <p className="text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1">Zakres projektu</p>
+              <p className="text-[13px] text-white/75">{deal.project_scope}</p>
+            </div>
+          )}
 
           {/* Next step */}
-          <div className="p-3 rounded-[10px] bg-[#6366f1]/[0.08] border border-[#6366f1]/20">
-            <p className="text-[10px] font-semibold text-[#6366f1]/70 uppercase tracking-wide mb-1">Następny krok</p>
-            <p className="text-[13px] text-white/80">{deal.nextStep || '—'}</p>
-          </div>
+          {deal.next_step && (
+            <div className="p-3 rounded-[10px] bg-[#6366f1]/[0.08] border border-[#6366f1]/20">
+              <p className="text-[10px] font-semibold text-[#6366f1]/70 uppercase tracking-wide mb-1">Następny krok</p>
+              <p className="text-[13px] text-white/80">{deal.next_step}</p>
+            </div>
+          )}
 
           {/* Last contact */}
           <div className="flex items-center gap-2 text-[12px] text-white/40">
             <Calendar size={13} />
-            Ostatni kontakt: {new Date(deal.lastContact).toLocaleDateString('pl-PL')}
+            Ostatni kontakt: {new Date(deal.last_contact_date).toLocaleDateString('pl-PL')}
           </div>
 
           {/* Notes */}
-          {deal.notes.length > 0 && (
-            <div>
-              <p className="text-[11px] font-semibold text-white/40 uppercase tracking-wide mb-2">Historia rozmów</p>
-              <div className="space-y-2">
-                {deal.notes.map((note, i) => (
-                  <div key={i} className="p-3 rounded-[10px] bg-white/[0.03] border border-white/[0.05]">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[10px] font-semibold text-[#6366f1]">{note.author}</span>
-                      <span className="text-[10px] text-white/30">{new Date(note.date).toLocaleDateString('pl-PL')}</span>
-                    </div>
-                    <p className="text-[12px] text-white/65">{note.content}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Lost reason */}
-          {deal.lostReason && (
-            <div className="p-3 rounded-[10px] bg-red-500/[0.08] border border-red-500/20">
-              <p className="text-[10px] font-semibold text-red-400/70 uppercase tracking-wide mb-1">Powód przegranej</p>
-              <p className="text-[13px] text-white/70">{deal.lostReason}</p>
+          {deal.notes && (
+            <div className="p-3 rounded-[10px] bg-white/[0.03] border border-white/[0.05]">
+              <p className="text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1">Notatki</p>
+              <p className="text-[12px] text-white/65 whitespace-pre-wrap">{deal.notes}</p>
             </div>
           )}
 
@@ -190,36 +248,53 @@ function DealModal({ deal, onClose }: { deal: Deal; onClose: () => void }) {
 
 const SEGMENTS = ['e-commerce', 'usługi', 'gastro', 'beauty', 'b2b', 'nieruchomości', 'zdrowie', 'edukacja']
 
-function NewDealModal({ onClose, onAdd }: { onClose: () => void; onAdd: (deal: Deal) => void }) {
+function NewDealModal({
+  onClose,
+  onAdd,
+}: {
+  onClose: () => void
+  onAdd: (deal: Deal) => void
+}) {
   const [form, setForm] = useState({
     contactName: '', company: '', position: '',
-    email: '', phone: '', value: '', stage: 'nowy-lead' as DealStage, segment: 'usługi',
+    email: '', phone: '', value: '', stage: 'nowy_lead' as DealStage, segment: 'usługi',
   })
+  const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [error, setError] = useState('')
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }))
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    const deal: Deal = {
-      id: `new-${Date.now()}`,
-      contactName: form.contactName || 'Nowy Kontakt',
-      company: form.company || 'Nowa Firma',
-      position: form.position || 'Dyrektor',
-      email: form.email || 'kontakt@firma.pl',
-      phone: form.phone || '+48 000 000 000',
-      value: parseInt(form.value) || 10000,
-      stage: form.stage,
-      aiScore: 'warm',
-      aiScoreNum: 55,
-      lastContact: new Date().toISOString().slice(0, 10),
-      segment: form.segment,
-      notes: [],
-      nextStep: 'Umówić rozmowę discovery',
-      projectScope: 'Do uzupełnienia po pierwszej rozmowie',
-    }
-    onAdd(deal)
+    setSaving(true)
+    setError('')
+
+    const supabase = createClient()
+    const { data, error: err } = await supabase
+      .from('deals')
+      .insert({
+        title: form.company || 'Nowa Firma',
+        contact_name: form.contactName || null,
+        contact_email: form.email || null,
+        contact_phone: form.phone || null,
+        contact_position: form.position || null,
+        contact_segment: form.segment,
+        value: parseInt(form.value) || 10000,
+        stage: form.stage,
+        ai_score_label: 'warm',
+        ai_score_num: 50,
+        last_contact_date: new Date().toISOString().slice(0, 10),
+        next_step: 'Umówić rozmowę discovery',
+        project_scope: 'Do uzupełnienia po pierwszej rozmowie',
+      })
+      .select()
+      .single()
+
+    setSaving(false)
+    if (err) { setError(err.message); return }
+    onAdd(data as Deal)
     setSaved(true)
     setTimeout(() => onClose(), 1200)
   }
@@ -228,7 +303,6 @@ function NewDealModal({ onClose, onAdd }: { onClose: () => void; onAdd: (deal: D
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div className="relative z-10 w-full max-w-[480px] bg-[#0F0F1A] border border-white/[0.1] rounded-[18px] shadow-2xl overflow-hidden">
-        {/* Header */}
         <div className="flex items-center justify-between px-6 py-5 border-b border-white/[0.07]">
           <div>
             <p className="text-[15px] font-bold text-white">Nowy deal</p>
@@ -245,14 +319,19 @@ function NewDealModal({ onClose, onAdd }: { onClose: () => void; onAdd: (deal: D
               <CheckCircle2 size={22} className="text-green-400" />
             </div>
             <p className="text-[15px] font-semibold text-white">Deal dodany!</p>
-            <p className="text-[12px] text-white/40">{form.company} pojawi się w kolumnie pipeline</p>
+            <p className="text-[12px] text-white/40">{form.company} pojawił się w pipeline</p>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            {error && (
+              <div className="flex items-center gap-2 p-3 rounded-[8px] bg-red-500/10 border border-red-500/20 text-red-400 text-[12px]">
+                <AlertCircle size={13} /> {error}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Imię i Nazwisko *</label>
-                <input value={form.contactName} onChange={set('contactName')} required placeholder="Jan Kowalski"
+                <label className="block text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Imię i Nazwisko</label>
+                <input value={form.contactName} onChange={set('contactName')} placeholder="Jan Kowalski"
                   className="w-full px-3 py-2 rounded-[8px] bg-white/[0.04] border border-white/[0.08] text-white text-[13px] placeholder:text-white/20 focus:outline-none focus:border-[#6366f1]/50 transition-all" />
               </div>
               <div>
@@ -293,7 +372,7 @@ function NewDealModal({ onClose, onAdd }: { onClose: () => void; onAdd: (deal: D
                 <label className="block text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Etap pipeline</label>
                 <select value={form.stage} onChange={set('stage')}
                   className="w-full px-3 py-2 rounded-[8px] bg-[#1A1A2E] border border-white/[0.08] text-white text-[13px] focus:outline-none focus:border-[#6366f1]/50 transition-all">
-                  {(Object.keys(STAGE_CONFIG) as DealStage[]).filter(s => !['przegrana','nie-teraz'].includes(s)).map(s => (
+                  {STAGE_ORDER.filter(s => !['przegrana', 'nie_teraz'].includes(s)).map(s => (
                     <option key={s} value={s}>{STAGE_CONFIG[s].label}</option>
                   ))}
                 </select>
@@ -312,9 +391,9 @@ function NewDealModal({ onClose, onAdd }: { onClose: () => void; onAdd: (deal: D
                 className="flex-1 py-2.5 rounded-[10px] bg-white/[0.04] border border-white/[0.08] text-white/50 text-[13px] font-medium hover:bg-white/[0.08] hover:text-white transition-all">
                 Anuluj
               </button>
-              <button type="submit"
-                className="flex-1 py-2.5 rounded-[10px] bg-[#6366f1] text-white text-[13px] font-bold hover:bg-[#5254cc] transition-all shadow-lg shadow-indigo-500/25">
-                Dodaj deal
+              <button type="submit" disabled={saving}
+                className="flex-1 py-2.5 rounded-[10px] bg-[#6366f1] text-white text-[13px] font-bold hover:bg-[#5254cc] disabled:opacity-60 transition-all shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2">
+                {saving ? <><Loader2 size={13} className="animate-spin" /> Zapisuję...</> : 'Dodaj deal'}
               </button>
             </div>
           </form>
@@ -327,24 +406,74 @@ function NewDealModal({ onClose, onAdd }: { onClose: () => void; onAdd: (deal: D
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function PipelinePage() {
+  const [deals, setDeals] = useState<Deal[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null)
-  const [extraDeals, setExtraDeals] = useState<Deal[]>([])
   const [showNewDeal, setShowNewDeal] = useState(false)
-  const allDeals = [...extraDeals]
 
-  // Group deals by stage
+  // ── Fetch all deals from Supabase ──────────────────────────────────────────
+  const fetchDeals = useCallback(async () => {
+    const supabase = createClient()
+    const { data, error: err } = await supabase
+      .from('deals')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    if (err) { setError(err.message); setLoading(false); return }
+    setDeals((data as Deal[]) ?? [])
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { fetchDeals() }, [fetchDeals])
+
+  // ── Change stage ───────────────────────────────────────────────────────────
+  const handleStageChange = async (id: string, stage: DealStage) => {
+    const supabase = createClient()
+    const { error: err } = await supabase
+      .from('deals')
+      .update({ stage, updated_at: new Date().toISOString() })
+      .eq('id', id)
+
+    if (err) { console.error(err); return }
+    setDeals(prev => prev.map(d => d.id === id ? { ...d, stage } : d))
+    setSelectedDeal(prev => prev?.id === id ? { ...prev, stage } : prev)
+  }
+
+  // ── Add new deal ───────────────────────────────────────────────────────────
+  const handleAddDeal = (deal: Deal) => {
+    setDeals(prev => [deal, ...prev])
+  }
+
+  // ── Group by stage ─────────────────────────────────────────────────────────
   const dealsByStage = STAGE_ORDER.reduce<Record<DealStage, Deal[]>>((acc, stage) => {
-    acc[stage] = allDeals.filter(d => d.stage === stage)
+    acc[stage] = deals.filter(d => d.stage === stage)
     return acc
   }, {} as Record<DealStage, Deal[]>)
 
-  const totalPipelineValue = allDeals
-    .filter(d => !['przegrana', 'nie-teraz'].includes(d.stage))
-    .reduce((sum, d) => sum + d.value, 0)
+  const totalValue = deals
+    .filter(d => !['przegrana', 'nie_teraz'].includes(d.stage))
+    .reduce((sum, d) => sum + (d.value ?? 0), 0)
 
-  const wonValue = allDeals
+  const wonValue = deals
     .filter(d => d.stage === 'wygrana')
-    .reduce((sum, d) => sum + d.value, 0)
+    .reduce((sum, d) => sum + (d.value ?? 0), 0)
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 size={24} className="text-[#6366f1] animate-spin" />
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center gap-2 p-4 rounded-[10px] bg-red-500/10 border border-red-500/20 text-red-400">
+        <AlertCircle size={15} /> Błąd ładowania: {error}
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -353,28 +482,30 @@ export default function PipelinePage() {
         <div>
           <h1 className="text-[20px] font-bold text-white">Pipeline CRM</h1>
           <p className="text-[12px] text-white/40 mt-0.5">
-            {allDeals.length} dealów · aktywny:{' '}
-            <span className="text-white/60 font-semibold">{totalPipelineValue.toLocaleString('pl-PL')} PLN</span>
+            {deals.length} dealów · aktywny:{' '}
+            <span className="text-white/60 font-semibold">{totalValue.toLocaleString('pl-PL')} PLN</span>
             <span className="hidden sm:inline">{' · '}wygrane:{' '}
             <span className="text-green-400 font-semibold">{wonValue.toLocaleString('pl-PL')} PLN</span></span>
           </p>
         </div>
-        <button onClick={() => setShowNewDeal(true)} className="self-start sm:self-auto flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] bg-[#6366f1]/10 border border-[#6366f1]/30 text-[#a5b4fc] text-[12px] font-medium hover:bg-[#6366f1]/20 transition-all">
+        <button
+          onClick={() => setShowNewDeal(true)}
+          className="self-start sm:self-auto flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] bg-[#6366f1]/10 border border-[#6366f1]/30 text-[#a5b4fc] text-[12px] font-medium hover:bg-[#6366f1]/20 transition-all"
+        >
           + Nowy deal
         </button>
       </div>
 
-      {/* Kanban board - horizontal scroll */}
+      {/* Kanban board */}
       <div className="flex-1 overflow-x-auto pb-4">
         <div className="flex gap-3 h-full" style={{ minWidth: `${STAGE_ORDER.length * 230}px` }}>
           {STAGE_ORDER.map((stage) => {
             const config = STAGE_CONFIG[stage]
-            const deals = dealsByStage[stage]
-            const stageValue = deals.reduce((s, d) => s + d.value, 0)
+            const stageDeals = dealsByStage[stage]
+            const stageValue = stageDeals.reduce((s, d) => s + (d.value ?? 0), 0)
 
             return (
               <div key={stage} className="flex flex-col w-[220px] flex-shrink-0">
-                {/* Column header */}
                 <div
                   className="flex items-center justify-between px-3 py-2 rounded-[10px] mb-2 flex-shrink-0"
                   style={{ background: config.bg }}
@@ -387,7 +518,7 @@ export default function PipelinePage() {
                       className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold"
                       style={{ background: config.color + '25', color: config.color }}
                     >
-                      {deals.length}
+                      {stageDeals.length}
                     </span>
                   </div>
                   {stageValue > 0 && (
@@ -397,12 +528,11 @@ export default function PipelinePage() {
                   )}
                 </div>
 
-                {/* Cards */}
                 <div className="flex-1 space-y-2 overflow-y-auto">
-                  {deals.map((deal) => (
+                  {stageDeals.map((deal) => (
                     <DealCard key={deal.id} deal={deal} onClick={() => setSelectedDeal(deal)} />
                   ))}
-                  {deals.length === 0 && (
+                  {stageDeals.length === 0 && (
                     <div className="text-center py-6 text-[11px] text-white/20">Brak dealów</div>
                   )}
                 </div>
@@ -412,16 +542,18 @@ export default function PipelinePage() {
         </div>
       </div>
 
-      {/* Deal detail modal */}
       {selectedDeal && (
-        <DealModal deal={selectedDeal} onClose={() => setSelectedDeal(null)} />
+        <DealModal
+          deal={selectedDeal}
+          onClose={() => setSelectedDeal(null)}
+          onStageChange={handleStageChange}
+        />
       )}
 
-      {/* New deal modal */}
       {showNewDeal && (
         <NewDealModal
           onClose={() => setShowNewDeal(false)}
-          onAdd={(deal) => setExtraDeals(prev => [...prev, deal])}
+          onAdd={handleAddDeal}
         />
       )}
     </div>
