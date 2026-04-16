@@ -300,8 +300,13 @@ function NewLeadModal({
       outreachHistory: [],
     }
 
+    let savedLead: Lead
+    try {
+      savedLead = await onAdd(lead)
+    } catch {
+      return
+    }
     setSaved(true)
-    const savedLead = await onAdd(lead)
 
     // Trigger AI scoring in background
     setScanning(true)
