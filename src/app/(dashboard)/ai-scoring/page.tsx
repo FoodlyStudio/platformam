@@ -1,14 +1,25 @@
 'use client'
 
-import {
-  PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
-} from 'recharts'
+import { useState, useEffect } from 'react'
 import {
   BrainCircuit, Flame, Thermometer, Snowflake,
-  CheckCircle2, Upload, AlertCircle,
+  AlertCircle, Users,
 } from 'lucide-react'
-const SCORING_DISTRIBUTION: { label: string; value: number; color: string }[] = []
-const RECENTLY_SCORED: unknown[] = []
+import { createClient } from '@/lib/supabase/client'
+
+// ─── Types ─────────────────────────────────────────────────────────────────────
+
+interface ScoredLead {
+  id: string
+  firstName: string
+  lastName: string
+  company: string
+  position: string
+  aiScore: number
+  aiLabel: 'hot' | 'warm' | 'cold'
+  problem: string
+  icebreaker: string
+}
 
 // ─── Criteria ─────────────────────────────────────────────────────────────────
 
@@ -47,33 +58,17 @@ function ScoreBadge({ label }: { label: 'hot' | 'warm' | 'cold' }) {
   return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 text-[10px] font-bold"><Snowflake size={9}/>Cold</span>
 }
 
-const PIE_COLORS = {
-  'Hot (70-100)':  '#ef4444',
-  'Warm (40-69)': '#f97316',
-  'Cold (0-39)':  '#3b82f6',
-}
-
-function CustomPieTooltip({ active, payload }: any) {
-  if (!active || !payload?.length) return null
-  return (
-    <div className="bg-[#0F0F1A] border border-white/10 rounded-[8px] px-3 py-2 text-[12px]">
-      <p style={{ color: payload[0].payload.color }}>{payload[0].name}: <strong>{payload[0].value}%</strong></p>
-    </div>
-  )
-}
-
-// ─── Score bar ────────────────────────────────────────────────────────────────
-
-function ScoreBar({ value, max = 25, color }: { value: number; max?: number; color: string }) {
+function ScoreBar({ value }: { value: number }) {
+  const color = value >= 70 ? '#ef4444' : value >= 40 ? '#f97316' : '#3b82f6'
   return (
     <div className="flex items-center gap-2">
       <div className="flex-1 h-1.5 bg-white/[0.06] rounded-full">
         <div
           className="h-full rounded-full transition-all"
-          style={{ width: `${(value / max) * 100}%`, background: color }}
+          style={{ width: `${value}%`, background: color }}
         />
       </div>
-      <span className="text-[10px] text-white/40 w-6 text-right">{value}</span>
+      <span className="text-[11px] font-bold text-white w-6 text-right">{value}</span>
     </div>
   )
 }
@@ -81,6 +76,46 @@ function ScoreBar({ value, max = 25, color }: { value: number; max?: number; col
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AiScoringPage() {
+  const [leads, setLeads] = useState<ScoredLead[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    async function loadLeads() {
+      const supabase = createClient()
+      const { data, error } = await supabase
+        .from('leads')
+        .select('id, first_name, last_name, company, position, ai_score_num, ai_score_label, ai_problem, ai_icebreaker')
+        .order('ai_score_num', { ascending: false })
+
+      if (error) {
+        console.error('Błąd ładowania leadów:', error)
+        setLoading(false)
+        return
+      }
+
+      const mapped: ScoredLead[] = (data ?? []).map((row) => ({
+        id: row.id as string,
+        firstName: (row.first_name as string) ?? '',
+        lastName: (row.last_name as string) ?? '',
+        company: (row.company as string) ?? '',
+        position: (row.position as string) ?? '',
+        aiScore: (row.ai_score_num as number) ?? 50,
+        aiLabel: ((row.ai_score_label as string) ?? 'warm') as 'hot' | 'warm' | 'cold',
+        problem: (row.ai_problem as string) ?? '',
+        icebreaker: (row.ai_icebreaker as string) ?? '',
+      }))
+
+      setLeads(mapped)
+      setLoading(false)
+    }
+    loadLeads()
+  }, [])
+
+  const hot  = leads.filter(l => l.aiLabel === 'hot').length
+  const warm = leads.filter(l => l.aiLabel === 'warm').length
+  const cold = leads.filter(l => l.aiLabel === 'cold').length
+  const total = leads.length
+
   return (
     <div className="max-w-[1200px] space-y-6">
       {/* Header */}
@@ -92,18 +127,30 @@ export default function AiScoringPage() {
           </h1>
           <p className="text-[12px] text-white/40 mt-0.5">Automatyczna ocena każdego leadu w skali 0-100</p>
         </div>
+        {total > 0 && (
+          <span className="text-[12px] text-white/40 bg-white/[0.05] border border-white/[0.08] px-3 py-1.5 rounded-[8px]">
+            {total} leadów ocenionych
+          </span>
+        )}
       </div>
 
-      {/* Import status bar */}
-      <div className="flex items-center gap-3 p-4 rounded-[12px] bg-white/[0.03] border border-white/[0.07]">
-        <Upload size={16} className="text-white/30 flex-shrink-0" />
-        <div className="flex-1">
-          <p className="text-[13px] font-semibold text-white/60">Brak leadów do oceny</p>
-          <p className="text-[11px] text-white/30">
-            Najpierw dodaj leadów w zakładce <span className="text-white/50">Leady</span>, potem AI oceni każdego automatycznie.
-          </p>
+      {/* Status bar */}
+      {loading ? (
+        <div className="flex items-center gap-3 p-4 rounded-[12px] bg-white/[0.03] border border-white/[0.07]">
+          <div className="w-4 h-4 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+          <p className="text-[13px] text-white/40">Ładowanie leadów…</p>
         </div>
-      </div>
+      ) : total === 0 ? (
+        <div className="flex items-center gap-3 p-4 rounded-[12px] bg-white/[0.03] border border-white/[0.07]">
+          <Users size={16} className="text-white/30 flex-shrink-0" />
+          <div className="flex-1">
+            <p className="text-[13px] font-semibold text-white/60">Brak leadów do oceny</p>
+            <p className="text-[11px] text-white/30">
+              Najpierw dodaj leadów w zakładce <span className="text-white/50">Leady</span>, potem AI oceni każdego automatycznie.
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       {/* Methodology + Distribution */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
@@ -130,61 +177,105 @@ export default function AiScoringPage() {
           </div>
         </div>
 
-        {/* Distribution chart */}
+        {/* Distribution */}
         <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] p-5">
           <p className="text-[14px] font-semibold text-white mb-1">Rozkład bazy leadów</p>
-          <p className="text-[12px] text-white/40 mb-4">Brak ocenionych leadów</p>
+          <p className="text-[12px] text-white/40 mb-4">
+            {loading ? 'Ładowanie…' : total === 0 ? 'Brak ocenionych leadów' : `${total} leadów łącznie`}
+          </p>
 
-          <div className="flex flex-col items-center justify-center py-8 gap-2">
-            <div className="w-16 h-16 rounded-full bg-white/[0.04] border-2 border-dashed border-white/10 flex items-center justify-center">
-              <BrainCircuit size={24} className="text-white/20" />
+          {!loading && total > 0 && (
+            <div className="space-y-3 mb-4">
+              <div className="flex items-center gap-2">
+                <Flame size={12} className="text-red-400 flex-shrink-0" />
+                <div className="flex-1 h-2 bg-white/[0.06] rounded-full overflow-hidden">
+                  <div className="h-full bg-red-500 rounded-full" style={{ width: `${total ? (hot / total) * 100 : 0}%` }} />
+                </div>
+                <span className="text-[11px] text-white/50 w-8 text-right">{hot}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Thermometer size={12} className="text-orange-400 flex-shrink-0" />
+                <div className="flex-1 h-2 bg-white/[0.06] rounded-full overflow-hidden">
+                  <div className="h-full bg-orange-500 rounded-full" style={{ width: `${total ? (warm / total) * 100 : 0}%` }} />
+                </div>
+                <span className="text-[11px] text-white/50 w-8 text-right">{warm}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Snowflake size={12} className="text-blue-400 flex-shrink-0" />
+                <div className="flex-1 h-2 bg-white/[0.06] rounded-full overflow-hidden">
+                  <div className="h-full bg-blue-500 rounded-full" style={{ width: `${total ? (cold / total) * 100 : 0}%` }} />
+                </div>
+                <span className="text-[11px] text-white/50 w-8 text-right">{cold}</span>
+              </div>
             </div>
-            <p className="text-[12px] text-white/30 text-center mt-1">Dodaj leadów i uruchom scoring</p>
-          </div>
+          )}
 
-          {/* Hot/Warm/Cold summary */}
+          {!loading && total === 0 && (
+            <div className="flex flex-col items-center justify-center py-8 gap-2">
+              <div className="w-16 h-16 rounded-full bg-white/[0.04] border-2 border-dashed border-white/10 flex items-center justify-center">
+                <BrainCircuit size={24} className="text-white/20" />
+              </div>
+              <p className="text-[12px] text-white/30 text-center mt-1">Dodaj leadów i uruchom scoring</p>
+            </div>
+          )}
+
           <div className="grid grid-cols-3 gap-2 mt-2 pt-4 border-t border-white/[0.07]">
             <div className="text-center">
               <Flame size={16} className="text-red-400 mx-auto mb-1" />
-              <p className="text-[16px] font-bold text-white">0</p>
+              <p className="text-[16px] font-bold text-white">{loading ? '…' : hot}</p>
               <p className="text-[9px] text-white/40 uppercase tracking-wide">Hot leads</p>
             </div>
             <div className="text-center">
               <Thermometer size={16} className="text-orange-400 mx-auto mb-1" />
-              <p className="text-[16px] font-bold text-white">0</p>
+              <p className="text-[16px] font-bold text-white">{loading ? '…' : warm}</p>
               <p className="text-[9px] text-white/40 uppercase tracking-wide">Warm leads</p>
             </div>
             <div className="text-center">
               <Snowflake size={16} className="text-blue-400 mx-auto mb-1" />
-              <p className="text-[16px] font-bold text-white">0</p>
+              <p className="text-[16px] font-bold text-white">{loading ? '…' : cold}</p>
               <p className="text-[9px] text-white/40 uppercase tracking-wide">Cold leads</p>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Recently scored table */}
-      <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] overflow-hidden">
-        <div className="px-5 py-4 border-b border-white/[0.07]">
-          <p className="text-[14px] font-semibold text-white">Ostatnio ocenione leady</p>
-          <p className="text-[12px] text-white/40 mt-0.5">Pełny breakdown score per kryterium</p>
+      {/* Leads table */}
+      {!loading && total > 0 && (
+        <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] overflow-hidden">
+          <div className="px-5 py-4 border-b border-white/[0.07]">
+            <p className="text-[14px] font-semibold text-white">Wszystkie ocenione leady</p>
+            <p className="text-[12px] text-white/40 mt-0.5">Posortowane od najwyższego score</p>
+          </div>
+          <div className="grid grid-cols-[1fr_120px_80px_80px] gap-2 px-5 py-2 border-b border-white/[0.05] text-[10px] font-semibold text-white/30 uppercase tracking-wide">
+            <span>Lead</span>
+            <span>Score</span>
+            <span className="text-center">Label</span>
+            <span className="text-center">Firma</span>
+          </div>
+          <div className="divide-y divide-white/[0.04]">
+            {leads.map((lead) => (
+              <div key={lead.id} className="grid grid-cols-[1fr_120px_80px_80px] gap-2 px-5 py-3 items-center hover:bg-white/[0.02] transition-colors">
+                <div className="min-w-0">
+                  <p className="text-[13px] font-semibold text-white truncate">{lead.firstName} {lead.lastName}</p>
+                  <p className="text-[11px] text-white/40 truncate">{lead.position}</p>
+                  {lead.problem && (
+                    <p className="text-[10px] text-white/25 truncate mt-0.5 italic">{lead.problem}</p>
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <ScoreBar value={lead.aiScore} />
+                </div>
+                <div className="flex justify-center">
+                  <ScoreBadge label={lead.aiLabel} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] text-white/50 truncate text-center">{lead.company || '—'}</p>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-        {/* Header */}
-        <div className="grid grid-cols-[1fr_60px_60px_80px_80px_80px_80px_80px] gap-2 px-5 py-2 border-b border-white/[0.05] text-[10px] font-semibold text-white/30 uppercase tracking-wide">
-          <span>Lead</span>
-          <span className="text-center">Łącznie</span>
-          <span className="text-center">Label</span>
-          <span className="hidden md:block text-center">ICP</span>
-          <span className="hidden md:block text-center">Sygnały</span>
-          <span className="hidden lg:block text-center">Aktywność</span>
-          <span className="hidden lg:block text-center">Potencjał</span>
-          <span className="hidden xl:block text-center">Wykres</span>
-        </div>
-        <div className="flex flex-col items-center justify-center py-10 gap-2">
-          <p className="text-[13px] text-white/30">Brak ocenionych leadów</p>
-          <p className="text-[11px] text-white/20">Po dodaniu leadów AI automatycznie je oceni</p>
-        </div>
-      </div>
+      )}
 
       {/* Alert box */}
       <div className="flex items-start gap-3 p-4 rounded-[12px] bg-amber-500/[0.07] border border-amber-500/20">
