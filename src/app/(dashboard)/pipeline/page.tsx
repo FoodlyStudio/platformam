@@ -4,8 +4,9 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Flame, Thermometer, Snowflake, X, Phone, Mail, Calendar,
   FileText, MessageSquare, DollarSign, User, Building2, Tag, CheckCircle2,
-  Loader2, AlertCircle,
+  Loader2, AlertCircle, Send, ExternalLink,
 } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
 // ─── Stage config (keys match DB values) ─────────────────────────────────────
@@ -120,12 +121,51 @@ function DealModal({
   const displayName = deal.contact_name || deal.title
   const initials = displayName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
   const [saving, setSaving] = useState(false)
+  const [showDM, setShowDM] = useState(false)
+  const [dmLoading, setDmLoading] = useState(false)
+  const [dmVariants, setDmVariants] = useState<Array<{ message: string } | null>>([null, null])
+  const [dmCopied, setDmCopied] = useState<number | null>(null)
+  const router = useRouter()
 
   const handleStageChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     setSaving(true)
     await onStageChange(deal.id, e.target.value as DealStage)
     setSaving(false)
     onClose()
+  }
+
+  const generateDM = async () => {
+    setDmLoading(true)
+    setDmVariants([null, null])
+    const payload = {
+      messageType: 'dm1_icebreaker',
+      leadData: {
+        first_name: (deal.contact_name ?? deal.title).split(' ')[0] ?? deal.title,
+        last_name: (deal.contact_name ?? '').split(' ').slice(1).join(' ') || '',
+        company: deal.title,
+        position: deal.contact_position ?? '',
+        industry: deal.contact_segment ?? '',
+        company_website: '',
+        buying_signal: deal.project_scope ?? '',
+      },
+    }
+    try {
+      const [r1, r2] = await Promise.all([
+        fetch('/api/ai/generate-message', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }),
+        fetch('/api/ai/generate-message', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, context: '[wariant alternatywny]' }) }),
+      ])
+      const [d1, d2] = await Promise.all([r1.json(), r2.json()])
+      setDmVariants([d1.result ?? null, d2.result ?? d1.result ?? null])
+    } catch { /* silent */ }
+    finally { setDmLoading(false) }
+  }
+
+  const copyDM = async (idx: number) => {
+    const v = dmVariants[idx]
+    if (!v) return
+    await navigator.clipboard.writeText(v.message)
+    setDmCopied(idx)
+    setTimeout(() => setDmCopied(null), 2000)
   }
 
   return (
@@ -231,13 +271,44 @@ function DealModal({
 
           {/* Actions */}
           <div className="grid grid-cols-2 gap-2 pt-2">
-            <button className="flex items-center justify-center gap-1.5 py-2 rounded-[8px] bg-white/[0.04] border border-white/[0.07] text-white/60 text-[12px] font-medium hover:bg-white/[0.08] hover:text-white transition-all">
-              <MessageSquare size={13} /> Wyślij DM
+            <button onClick={() => { setShowDM(v => !v); if (!showDM) generateDM() }}
+              className="flex items-center justify-center gap-1.5 py-2 rounded-[8px] bg-white/[0.04] border border-white/[0.07] text-white/60 text-[12px] font-medium hover:bg-white/[0.08] hover:text-white transition-all">
+              <MessageSquare size={13} /> Generuj DM
             </button>
-            <button className="flex items-center justify-center gap-1.5 py-2 rounded-[8px] bg-[#6366f1]/15 border border-[#6366f1]/30 text-[#a5b4fc] text-[12px] font-medium hover:bg-[#6366f1]/25 transition-all">
-              <FileText size={13} /> Generuj ofertę
+            <button onClick={() => router.push('/offer-generator')}
+              className="flex items-center justify-center gap-1.5 py-2 rounded-[8px] bg-[#6366f1]/15 border border-[#6366f1]/30 text-[#a5b4fc] text-[12px] font-medium hover:bg-[#6366f1]/25 transition-all">
+              <FileText size={13} /> Generuj ofertę <ExternalLink size={10} />
             </button>
           </div>
+
+          {/* Inline DM panel */}
+          {showDM && (
+            <div className="rounded-[12px] bg-white/[0.03] border border-white/[0.07] p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-[12px] font-semibold text-white">2 warianty DM</p>
+                {dmLoading && <Loader2 size={13} className="animate-spin text-[#6366f1]" />}
+              </div>
+              {dmVariants.map((v, idx) => v && (
+                <div key={idx} className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-[#a5b4fc] uppercase">Wariant {idx === 0 ? 'A' : 'B'}</span>
+                    <button onClick={() => copyDM(idx)}
+                      className="flex items-center gap-1 px-2 py-0.5 rounded-[6px] bg-white/[0.05] text-white/50 text-[10px] hover:text-white transition-all">
+                      {dmCopied === idx ? <><CheckCircle2 size={10} className="text-green-400" /> Skopiowano</> : <><Send size={10} /> Kopiuj</>}
+                    </button>
+                  </div>
+                  <div className="p-3 rounded-[8px] bg-[#6366f1]/[0.07] border border-[#6366f1]/15">
+                    <pre className="text-[12px] text-white/75 whitespace-pre-wrap font-sans leading-relaxed">{v.message}</pre>
+                  </div>
+                </div>
+              ))}
+              {!dmLoading && dmVariants.every(v => v === null) && (
+                <button onClick={generateDM} className="w-full py-2 rounded-[8px] bg-[#6366f1] text-white text-[12px] font-bold hover:bg-[#5254cc] transition-all">
+                  Generuj ponownie
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -6,7 +6,7 @@ import {
   Phone, Mail, Globe, Calendar,
   MessageSquare, TrendingUp, SlidersHorizontal, CheckCircle2,
   Download, Link2, Share2, Brain, Plus, Loader2,
-  Send, StickyNote, ChevronDown,
+  Send, StickyNote, ChevronDown, Pencil, Trash2, ArrowUpDown,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { createClient } from '@/lib/supabase/client'
@@ -494,34 +494,35 @@ function DMModal({ lead, onClose }: { lead: Lead; onClose: () => void }) {
   const [msgType, setMsgType] = useState('dm1_icebreaker')
   const [context, setContext] = useState('')
   const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<{ message: string; notes: string } | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [variants, setVariants] = useState<Array<{ message: string; notes: string } | null>>([null, null])
+  const [copied, setCopied] = useState<number | null>(null)
+
+  const buildPayload = () => ({
+    messageType: msgType,
+    context: context || undefined,
+    leadData: {
+      first_name: lead.firstName,
+      last_name: lead.lastName,
+      company: lead.company,
+      position: lead.position,
+      industry: lead.segment,
+      linkedin_url: lead.linkedin,
+      company_website: lead.website,
+      buying_signal: lead.problem,
+    },
+  })
 
   const generate = async () => {
     setLoading(true)
-    setResult(null)
+    setVariants([null, null])
     try {
-      const res = await fetch('/api/ai/generate-message', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messageType: msgType,
-          context: context || undefined,
-          leadData: {
-            first_name: lead.firstName,
-            last_name: lead.lastName,
-            company: lead.company,
-            position: lead.position,
-            industry: lead.segment,
-            linkedin_url: lead.linkedin,
-            company_website: lead.website,
-            buying_signal: lead.problem,
-          },
-        }),
-      })
-      const data = await res.json()
-      if (data.error) throw new Error(data.error)
-      setResult(data.result)
+      const [r1, r2] = await Promise.all([
+        fetch('/api/ai/generate-message', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildPayload()) }),
+        fetch('/api/ai/generate-message', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...buildPayload(), context: (context ? context + ' ' : '') + '[wariant alternatywny, inne sformułowanie]' }) }),
+      ])
+      const [d1, d2] = await Promise.all([r1.json(), r2.json()])
+      if (d1.error) throw new Error(d1.error)
+      setVariants([d1.result, d2.result ?? d1.result])
     } catch (e: unknown) {
       toast.error((e as Error).message || 'Błąd generowania')
     } finally {
@@ -529,21 +530,24 @@ function DMModal({ lead, onClose }: { lead: Lead; onClose: () => void }) {
     }
   }
 
-  const copy = async () => {
-    if (!result) return
-    await navigator.clipboard.writeText(result.message)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+  const copy = async (idx: number) => {
+    const v = variants[idx]
+    if (!v) return
+    await navigator.clipboard.writeText(v.message)
+    setCopied(idx)
+    setTimeout(() => setCopied(null), 2000)
     toast.success('Wiadomość skopiowana')
   }
+
+  const hasResults = variants.some(v => v !== null)
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-[480px] bg-[#0F0F1A] border border-white/[0.1] rounded-[18px] shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-5 border-b border-white/[0.07]">
+      <div className="relative z-10 w-full max-w-[560px] bg-[#0F0F1A] border border-white/[0.1] rounded-[18px] shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-6 py-5 border-b border-white/[0.07] sticky top-0 bg-[#0F0F1A] z-10">
           <div>
-            <p className="text-[15px] font-bold text-white">Generuj DM</p>
+            <p className="text-[15px] font-bold text-white">Generuj DM — 2 warianty</p>
             <p className="text-[11px] text-white/40 mt-0.5">{lead.firstName} {lead.lastName} · {lead.company}</p>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-[8px] text-white/40 hover:text-white hover:bg-white/[0.06] transition-all"><X size={16} /></button>
@@ -570,21 +574,26 @@ function DMModal({ lead, onClose }: { lead: Lead; onClose: () => void }) {
 
           <button onClick={generate} disabled={loading}
             className="w-full flex items-center justify-center gap-2 py-2.5 rounded-[10px] bg-[#6366f1] hover:bg-[#5254cc] disabled:opacity-60 text-white text-[13px] font-bold transition-all">
-            {loading ? <><Loader2 size={14} className="animate-spin" /> Generuję...</> : <><Send size={14} /> Generuj wiadomość</>}
+            {loading ? <><Loader2 size={14} className="animate-spin" /> Generuję 2 warianty...</> : <><Send size={14} /> Generuj 2 warianty</>}
           </button>
 
-          {result && (
-            <div className="space-y-3">
-              <div className="p-4 rounded-[10px] bg-[#6366f1]/[0.07] border border-[#6366f1]/20">
-                <pre className="text-[13px] text-white/80 whitespace-pre-wrap font-sans leading-relaxed">{result.message}</pre>
-              </div>
-              {result.notes && (
-                <p className="text-[11px] text-white/40 italic">{result.notes}</p>
-              )}
-              <button onClick={copy}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] bg-white/[0.05] border border-white/[0.09] text-white/55 text-[11px] font-medium hover:bg-white/[0.09] hover:text-white transition-all">
-                {copied ? <><CheckCircle2 size={12} className="text-green-400" /> Skopiowano</> : <>Kopiuj wiadomość</>}
-              </button>
+          {hasResults && (
+            <div className="space-y-4">
+              {variants.map((v, idx) => v && (
+                <div key={idx} className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-[#a5b4fc] uppercase tracking-wide">Wariant {idx === 0 ? 'A' : 'B'}</span>
+                    <button onClick={() => copy(idx)}
+                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-[7px] bg-white/[0.05] border border-white/[0.09] text-white/55 text-[10px] font-medium hover:bg-white/[0.09] hover:text-white transition-all">
+                      {copied === idx ? <><CheckCircle2 size={11} className="text-green-400" /> Skopiowano</> : <>Kopiuj</>}
+                    </button>
+                  </div>
+                  <div className="p-4 rounded-[10px] bg-[#6366f1]/[0.07] border border-[#6366f1]/20">
+                    <pre className="text-[13px] text-white/80 whitespace-pre-wrap font-sans leading-relaxed">{v.message}</pre>
+                  </div>
+                  {v.notes && <p className="text-[11px] text-white/40 italic">{v.notes}</p>}
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -621,6 +630,168 @@ function NoteModal({ lead, onSave, onClose }: { lead: Lead; onSave: (note: strin
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Edit Lead Modal ──────────────────────────────────────────────────────────
+
+function EditLeadModal({
+  lead, onClose, onSave, onDelete, segments, segmentLabels, onAddSegment,
+}: {
+  lead: Lead
+  onClose: () => void
+  onSave: (updated: Lead) => Promise<void>
+  onDelete: (id: string) => Promise<void>
+  segments: string[]
+  segmentLabels: Record<string, string>
+  onAddSegment: (key: string, label: string) => void
+}) {
+  const [form, setForm] = useState({
+    firstName: lead.firstName,
+    lastName: lead.lastName,
+    company: lead.company,
+    position: lead.position,
+    email: lead.email,
+    phone: lead.phone,
+    city: lead.city,
+    segment: lead.segment,
+    website: lead.website ?? '',
+    linkedin: lead.linkedin ?? '',
+    instagram: lead.instagram ?? '',
+    notes: lead.notes ?? '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    setForm(f => ({ ...f, [k]: e.target.value }))
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSaving(true)
+    const updated: Lead = {
+      ...lead,
+      firstName: form.firstName || lead.firstName,
+      lastName: form.lastName || lead.lastName,
+      company: form.company || lead.company,
+      position: form.position || lead.position,
+      email: form.email || lead.email,
+      phone: form.phone || lead.phone,
+      city: form.city || lead.city,
+      segment: form.segment,
+      website: form.website || undefined,
+      linkedin: form.linkedin || undefined,
+      instagram: form.instagram || undefined,
+      notes: form.notes || undefined,
+    }
+    await onSave(updated)
+    setSaving(false)
+    onClose()
+  }
+
+  const handleDelete = async () => {
+    if (!confirmDelete) { setConfirmDelete(true); return }
+    setDeleting(true)
+    await onDelete(lead.id)
+    setDeleting(false)
+    onClose()
+  }
+
+  const inputCls = 'w-full px-3 py-2 rounded-[8px] bg-white/[0.04] border border-white/[0.08] text-white text-[13px] placeholder:text-white/20 focus:outline-none focus:border-[#6366f1]/50 transition-all'
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-[520px] bg-[#0F0F1A] border border-white/[0.1] rounded-[18px] shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-6 py-5 border-b border-white/[0.07] sticky top-0 bg-[#0F0F1A] z-10">
+          <div>
+            <p className="text-[15px] font-bold text-white">Edytuj lead</p>
+            <p className="text-[11px] text-white/40 mt-0.5">{lead.firstName} {lead.lastName} · {lead.company}</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-[8px] text-white/40 hover:text-white hover:bg-white/[0.06] transition-all"><X size={16} /></button>
+        </div>
+        <form onSubmit={handleSave} className="p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Imię</label>
+              <input value={form.firstName} onChange={set('firstName')} className={inputCls} />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Nazwisko</label>
+              <input value={form.lastName} onChange={set('lastName')} className={inputCls} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Firma</label>
+              <input value={form.company} onChange={set('company')} className={inputCls} />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Stanowisko</label>
+              <input value={form.position} onChange={set('position')} className={inputCls} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Email</label>
+              <input value={form.email} onChange={set('email')} type="email" className={inputCls} />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Telefon</label>
+              <input value={form.phone} onChange={set('phone')} className={inputCls} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Miasto</label>
+              <input value={form.city} onChange={set('city')} className={inputCls} />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Branża</label>
+              <SegmentCombobox
+                value={form.segment}
+                onChange={v => setForm(f => ({ ...f, segment: v }))}
+                segments={segments}
+                segmentLabels={segmentLabels}
+                onAddSegment={onAddSegment}
+              />
+            </div>
+          </div>
+          <div className="space-y-2.5">
+            <label className="block text-[10px] font-semibold text-white/40 uppercase tracking-wide">Social & strona</label>
+            <div className="flex items-center gap-2">
+              <Globe size={13} className="text-white/25 flex-shrink-0" />
+              <input value={form.website} onChange={set('website')} placeholder="strona.pl" className="flex-1 px-3 py-2 rounded-[8px] bg-white/[0.04] border border-white/[0.08] text-white text-[12px] placeholder:text-white/20 focus:outline-none focus:border-[#6366f1]/50 transition-all" />
+            </div>
+            <div className="flex items-center gap-2">
+              <Link2 size={13} className="text-blue-400/60 flex-shrink-0" />
+              <input value={form.linkedin} onChange={set('linkedin')} placeholder="linkedin.com/in/..." className="flex-1 px-3 py-2 rounded-[8px] bg-white/[0.04] border border-white/[0.08] text-white text-[12px] placeholder:text-white/20 focus:outline-none focus:border-[#6366f1]/50 transition-all" />
+            </div>
+            <div className="flex items-center gap-2">
+              <Share2 size={13} className="text-pink-400/60 flex-shrink-0" />
+              <input value={form.instagram} onChange={set('instagram')} placeholder="instagram.com/..." className="flex-1 px-3 py-2 rounded-[8px] bg-white/[0.04] border border-white/[0.08] text-white text-[12px] placeholder:text-white/20 focus:outline-none focus:border-[#6366f1]/50 transition-all" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Notatka</label>
+            <textarea value={form.notes} onChange={set('notes')} rows={3} placeholder="Notatki, obserwacje..."
+              className="w-full px-3 py-2 rounded-[8px] bg-white/[0.04] border border-white/[0.08] text-white text-[12px] placeholder:text-white/20 focus:outline-none focus:border-[#6366f1]/50 transition-all resize-none" />
+          </div>
+          <div className="flex gap-2 pt-2">
+            <button type="button" onClick={handleDelete} disabled={deleting}
+              className={`px-4 py-2.5 rounded-[10px] text-[13px] font-bold transition-all disabled:opacity-60 flex items-center gap-1.5 ${confirmDelete ? 'bg-red-500 text-white hover:bg-red-600' : 'bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20'}`}>
+              <Trash2 size={13} />
+              {deleting ? 'Usuwanie…' : confirmDelete ? 'Potwierdź usunięcie' : 'Usuń lead'}
+            </button>
+            <button type="submit" disabled={saving}
+              className="flex-1 py-2.5 rounded-[10px] bg-[#6366f1] text-white text-[13px] font-bold hover:bg-[#5254cc] transition-all shadow-lg shadow-indigo-500/25 disabled:opacity-60">
+              {saving ? 'Zapisuję…' : 'Zapisz zmiany'}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   )
@@ -692,23 +863,27 @@ function LeadScanPanel({ lead, onScanned }: { lead: Lead; onScanned: (data: Part
 // ─── Lead detail panel ────────────────────────────────────────────────────────
 
 function LeadPanel({
-  lead, onClose, onUpdate,
+  lead, onClose, onUpdate, onDelete, segments, segmentLabels, onAddSegment,
 }: {
   lead: Lead
   onClose: () => void
-  onUpdate: (updated: Lead) => void
+  onUpdate: (updated: Lead) => Promise<void>
+  onDelete: (id: string) => Promise<void>
+  segments: string[]
+  segmentLabels: Record<string, string>
+  onAddSegment: (key: string, label: string) => void
 }) {
   const [currentLead, setCurrentLead] = useState(lead)
   const [showDM, setShowDM] = useState(false)
   const [showNote, setShowNote] = useState(false)
+  const [showEdit, setShowEdit] = useState(false)
   const [statusOpen, setStatusOpen] = useState(false)
   const initials = (currentLead.firstName[0] ?? '') + (currentLead.lastName[0] ?? '')
-  const { keys: segments, labels: segmentLabels } = loadSegments()
 
-  const update = useCallback((partial: Partial<Lead>) => {
+  const update = useCallback(async (partial: Partial<Lead>) => {
     const updated = { ...currentLead, ...partial }
     setCurrentLead(updated)
-    onUpdate(updated)
+    await onUpdate(updated)
   }, [currentLead, onUpdate])
 
   return (
@@ -728,7 +903,12 @@ function LeadPanel({
                 <p className="text-[12px] text-white/40">{currentLead.position} · {currentLead.company}</p>
               </div>
             </div>
-            <button onClick={onClose} className="p-1.5 rounded-[8px] text-white/40 hover:text-white hover:bg-white/[0.06] transition-all"><X size={16} /></button>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setShowEdit(true)} className="p-1.5 rounded-[8px] text-white/40 hover:text-[#a5b4fc] hover:bg-[#6366f1]/10 transition-all" title="Edytuj lead">
+                <Pencil size={15} />
+              </button>
+              <button onClick={onClose} className="p-1.5 rounded-[8px] text-white/40 hover:text-white hover:bg-white/[0.06] transition-all"><X size={16} /></button>
+            </div>
           </div>
 
           <div className="p-5 space-y-5">
@@ -746,7 +926,7 @@ function LeadPanel({
                 {statusOpen && (
                   <div className="absolute top-full mt-1 left-0 bg-[#1A1A2E] border border-white/[0.1] rounded-[10px] shadow-2xl z-20 overflow-hidden min-w-[140px]">
                     {Object.entries(STATUS_LABELS).map(([k, v]) => (
-                      <button key={k} onClick={() => { update({ status: k as Lead['status'] }); setStatusOpen(false) }}
+                      <button key={k} onClick={() => { void update({ status: k as Lead['status'] }); setStatusOpen(false) }}
                         className="w-full text-left px-3 py-2 text-[12px] text-white/70 hover:bg-white/[0.06] transition-colors">
                         {v}
                       </button>
@@ -757,7 +937,7 @@ function LeadPanel({
             </div>
 
             {/* AI Scan */}
-            <LeadScanPanel lead={currentLead} onScanned={partial => update(partial)} />
+            <LeadScanPanel lead={currentLead} onScanned={partial => void update(partial)} />
 
             {/* Contact info */}
             <div className="space-y-2">
@@ -871,12 +1051,9 @@ function LeadPanel({
             )}
 
             {/* Actions */}
-            <div className="grid grid-cols-3 gap-2 pt-2">
+            <div className="grid grid-cols-2 gap-2 pt-2">
               <button
-                onClick={() => {
-                  update({ status: 'pipeline' })
-                  toast.success(`${currentLead.firstName} przeniesiony do pipeline`)
-                }}
+                onClick={() => { void update({ status: 'pipeline' }); toast.success(`${currentLead.firstName} przeniesiony do pipeline`) }}
                 className="flex items-center justify-center gap-1 py-2.5 rounded-[8px] bg-white/[0.04] border border-white/[0.07] text-white/55 text-[11px] font-medium hover:bg-[#6366f1]/15 hover:border-[#6366f1]/30 hover:text-[#a5b4fc] transition-all">
                 <TrendingUp size={12} /> Pipeline
               </button>
@@ -890,6 +1067,11 @@ function LeadPanel({
                 className="flex items-center justify-center gap-1 py-2.5 rounded-[8px] bg-white/[0.04] border border-white/[0.07] text-white/55 text-[11px] font-medium hover:bg-white/[0.08] hover:text-white transition-all">
                 <StickyNote size={12} /> Notatka
               </button>
+              <button
+                onClick={() => setShowEdit(true)}
+                className="flex items-center justify-center gap-1 py-2.5 rounded-[8px] bg-white/[0.04] border border-white/[0.07] text-white/55 text-[11px] font-medium hover:bg-white/[0.08] hover:text-white transition-all">
+                <Pencil size={12} /> Edytuj lead
+              </button>
             </div>
           </div>
         </div>
@@ -899,8 +1081,25 @@ function LeadPanel({
       {showNote && (
         <NoteModal
           lead={currentLead}
-          onSave={note => { update({ notes: note }); toast.success('Notatka zapisana') }}
+          onSave={note => { void update({ notes: note }); toast.success('Notatka zapisana') }}
           onClose={() => setShowNote(false)}
+        />
+      )}
+      {showEdit && (
+        <EditLeadModal
+          lead={currentLead}
+          onClose={() => setShowEdit(false)}
+          onSave={async (updated) => {
+            setCurrentLead(updated)
+            await onUpdate(updated)
+          }}
+          onDelete={async (id) => {
+            await onDelete(id)
+            onClose()
+          }}
+          segments={segments}
+          segmentLabels={segmentLabels}
+          onAddSegment={onAddSegment}
         />
       )}
     </>
@@ -917,6 +1116,7 @@ export default function LeadsPage() {
   const [segmentFilter, setSegment] = useState<string>('all')
   const [scoreFilter, setScore] = useState<string>('all')
   const [statusFilter, setStatus] = useState<string>('all')
+  const [sortBy, setSortBy] = useState<string>('default')
   const [selectedLead, setSelected] = useState<Lead | null>(null)
   const [showFilters, setShowFilters] = useState(false)
   const [showNewLead, setShowNewLead] = useState(false)
@@ -957,6 +1157,18 @@ export default function LeadsPage() {
     setSelected(updated)
   }, [])
 
+  const deleteLead = useCallback(async (id: string) => {
+    const supabase = createClient()
+    const { error } = await supabase.from('leads').delete().eq('id', id)
+    if (error) {
+      toast.error('Nie udało się usunąć leada: ' + error.message)
+      return
+    }
+    setLeads(prev => prev.filter(l => l.id !== id))
+    setSelected(null)
+    toast.success('Lead usunięty')
+  }, [])
+
   const handleAddSegment = useCallback((key: string, label: string) => {
     const updated = saveSegment(key, label)
     setSegments(updated.keys)
@@ -964,7 +1176,8 @@ export default function LeadsPage() {
   }, [])
 
   const filtered = useMemo(() => {
-    return leads.filter(l => {
+    const LABEL_ORDER: Record<string, number> = { hot: 0, warm: 1, cold: 2 }
+    const arr = leads.filter(l => {
       const q = search.toLowerCase()
       if (q && !`${l.firstName} ${l.lastName} ${l.company}`.toLowerCase().includes(q)) return false
       if (segmentFilter !== 'all' && l.segment !== segmentFilter) return false
@@ -972,7 +1185,13 @@ export default function LeadsPage() {
       if (statusFilter !== 'all' && l.status !== statusFilter) return false
       return true
     })
-  }, [search, segmentFilter, scoreFilter, statusFilter, leads])
+    if (sortBy === 'score_desc') return [...arr].sort((a, b) => b.aiScore - a.aiScore)
+    if (sortBy === 'score_asc')  return [...arr].sort((a, b) => a.aiScore - b.aiScore)
+    if (sortBy === 'hot_first')  return [...arr].sort((a, b) => LABEL_ORDER[a.aiLabel] - LABEL_ORDER[b.aiLabel])
+    if (sortBy === 'warm_first') return [...arr].sort((a, b) => (a.aiLabel === 'warm' ? -1 : b.aiLabel === 'warm' ? 1 : 0))
+    if (sortBy === 'cold_first') return [...arr].sort((a, b) => (a.aiLabel === 'cold' ? -1 : b.aiLabel === 'cold' ? 1 : 0))
+    return arr
+  }, [search, segmentFilter, scoreFilter, statusFilter, sortBy, leads])
 
   return (
     <div className="max-w-[1400px] space-y-4">
@@ -1009,7 +1228,7 @@ export default function LeadsPage() {
         <button onClick={() => setShowFilters(v => !v)}
           className={`flex items-center gap-1.5 px-3 py-2 rounded-[8px] border text-[12px] font-medium transition-all ${showFilters ? 'bg-[#6366f1]/15 border-[#6366f1]/40 text-[#a5b4fc]' : 'bg-white/[0.04] border-white/[0.08] text-white/50 hover:text-white'}`}>
           <SlidersHorizontal size={13} /> Filtry
-          {(segmentFilter !== 'all' || scoreFilter !== 'all' || statusFilter !== 'all') && (
+          {(segmentFilter !== 'all' || scoreFilter !== 'all' || statusFilter !== 'all' || sortBy !== 'default') && (
             <span className="w-4 h-4 rounded-full bg-[#6366f1] text-white text-[9px] flex items-center justify-center font-bold">!</span>
           )}
         </button>
@@ -1043,8 +1262,20 @@ export default function LeadsPage() {
               {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
           </div>
-          {(segmentFilter !== 'all' || scoreFilter !== 'all' || statusFilter !== 'all') && (
-            <button onClick={() => { setSegment('all'); setScore('all'); setStatus('all') }}
+          <div>
+            <label className="block text-[10px] text-white/40 uppercase tracking-wide mb-1 flex items-center gap-1"><ArrowUpDown size={10} />Sortuj</label>
+            <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+              className="px-3 py-1.5 rounded-[8px] bg-[#1A1A2E] border border-white/[0.08] text-white text-[12px] focus:outline-none focus:border-[#6366f1]/50">
+              <option value="default">Domyślnie</option>
+              <option value="hot_first">Hot najpierw 🔥</option>
+              <option value="warm_first">Warm najpierw 🌡️</option>
+              <option value="cold_first">Cold najpierw ❄️</option>
+              <option value="score_desc">Wynik: od najwyższego</option>
+              <option value="score_asc">Wynik: od najniższego</option>
+            </select>
+          </div>
+          {(segmentFilter !== 'all' || scoreFilter !== 'all' || statusFilter !== 'all' || sortBy !== 'default') && (
+            <button onClick={() => { setSegment('all'); setScore('all'); setStatus('all'); setSortBy('default') }}
               className="self-end flex items-center gap-1 px-3 py-1.5 rounded-[8px] bg-white/[0.04] border border-white/[0.07] text-white/50 text-[12px] hover:text-white transition-all">
               <X size={12} /> Wyczyść
             </button>
@@ -1117,6 +1348,10 @@ export default function LeadsPage() {
           lead={selectedLead}
           onClose={() => setSelected(null)}
           onUpdate={updateLead}
+          onDelete={deleteLead}
+          segments={segments}
+          segmentLabels={segmentLabels}
+          onAddSegment={handleAddSegment}
         />
       )}
 
