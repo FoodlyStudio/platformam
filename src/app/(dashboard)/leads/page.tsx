@@ -44,9 +44,9 @@ interface Lead {
 function dbToLead(row: Record<string, unknown>): Lead {
   return {
     id: row.id as string,
-    firstName: row.first_name as string,
-    lastName: row.last_name as string,
-    company: row.company as string,
+    firstName: (row.first_name as string) ?? '',
+    lastName: (row.last_name as string) ?? '',
+    company: (row.company as string) ?? '',
     position: (row.position as string) ?? '',
     email: (row.email as string) ?? '',
     phone: (row.phone as string) ?? '',
@@ -56,9 +56,9 @@ function dbToLead(row: Record<string, unknown>): Lead {
     aiLabel: ((row.ai_score_label as string) ?? 'warm') as AiScore,
     status: ((row.app_status as string) ?? 'nowy') as Lead['status'],
     lastContact: (row.last_contact as string) ?? new Date().toISOString().slice(0, 10),
-    problem: (row.problem as string) ?? '',
-    icebreaker: (row.icebreaker as string) ?? '',
-    website: (row.website as string) ?? undefined,
+    problem: (row.ai_problem as string) ?? '',
+    icebreaker: (row.ai_icebreaker as string) ?? '',
+    website: (row.company_website as string) ?? undefined,
     linkedin: (row.linkedin_url as string) ?? undefined,
     instagram: (row.instagram_url as string) ?? undefined,
     notes: (row.notes as string) ?? undefined,
@@ -81,9 +81,9 @@ function leadToDb(lead: Lead) {
     ai_score_label: lead.aiLabel,
     app_status: lead.status,
     last_contact: lead.lastContact,
-    problem: lead.problem,
-    icebreaker: lead.icebreaker,
-    website: lead.website ?? null,
+    ai_problem: lead.problem,
+    ai_icebreaker: lead.icebreaker,
+    company_website: lead.website ?? null,
     linkedin_url: lead.linkedin ?? null,
     instagram_url: lead.instagram ?? null,
     notes: lead.notes ?? null,
@@ -929,19 +929,25 @@ export default function LeadsPage() {
   const addLead = useCallback(async (lead: Lead): Promise<Lead> => {
     const supabase = createClient()
     const { data, error } = await supabase.from('leads').insert(leadToDb(lead)).select().single()
-    if (!error && data) {
-      const saved = dbToLead(data as Record<string, unknown>)
-      setLeads(prev => [saved, ...prev])
-      return saved
+    if (error) {
+      console.error('Błąd zapisu leada:', error)
+      toast.error('Nie udało się zapisać leada: ' + error.message)
+      throw error
     }
-    // fallback: add with client id
-    setLeads(prev => [lead, ...prev])
-    return lead
+    const saved = dbToLead(data as Record<string, unknown>)
+    setLeads(prev => [saved, ...prev])
+    toast.success('Lead zapisany!')
+    return saved
   }, [])
 
   const updateLead = useCallback(async (updated: Lead) => {
     const supabase = createClient()
-    await supabase.from('leads').update(leadToDb(updated)).eq('id', updated.id)
+    const { error } = await supabase.from('leads').update(leadToDb(updated)).eq('id', updated.id)
+    if (error) {
+      console.error('Błąd aktualizacji leada:', error)
+      toast.error('Nie udało się zaktualizować leada: ' + error.message)
+      return
+    }
     setLeads(prev => prev.map(l => l.id === updated.id ? updated : l))
     setSelected(updated)
   }, [])

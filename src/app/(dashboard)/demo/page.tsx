@@ -1,5 +1,6 @@
 'use client'
 
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import {
   Users, TrendingUp, MessageSquare, DollarSign, Target,
@@ -7,17 +8,68 @@ import {
   ChevronRight, Clock, Zap, BookOpen,
 } from 'lucide-react'
 import { useAppUser } from '@/contexts/UserContext'
+import { createClient } from '@/lib/supabase/client'
 
-const KPI_CARDS = [
-  { label: 'Leady w tym miesiącu', value: '0', icon: Users,       color: '#6366f1', href: '/leads' },
-  { label: 'Aktywne deale',        value: '0', icon: TrendingUp,   color: '#22c55e', href: '/pipeline' },
-  { label: 'Reply rate',           value: '—', icon: MessageSquare,color: '#f59e0b', href: '/outreach' },
-  { label: 'Przychód miesiąc',     value: '0 PLN', icon: DollarSign, color: '#06b6d4', href: '/finance' },
-]
+interface KpiData {
+  leadsThisMonth: number
+  activeDeals: number
+  revenueThisMonth: number
+}
+
+function formatPLN(value: number): string {
+  if (value >= 1000) return (value / 1000).toFixed(0) + ' tys. PLN'
+  return value + ' PLN'
+}
 
 export default function DashboardPage() {
   const { user } = useAppUser()
   const today = new Date().toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long' })
+
+  const [kpi, setKpi] = useState<KpiData>({ leadsThisMonth: 0, activeDeals: 0, revenueThisMonth: 0 })
+  const [kpiLoading, setKpiLoading] = useState(true)
+
+  useEffect(() => {
+    async function loadKpi() {
+      const supabase = createClient()
+      const now = new Date()
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+
+      const [leadsRes, dealsRes, incomeRes] = await Promise.all([
+        supabase
+          .from('leads')
+          .select('id', { count: 'exact', head: true })
+          .gte('created_at', monthStart),
+        supabase
+          .from('deals')
+          .select('id', { count: 'exact', head: true })
+          .not('stage', 'in', '("wygrana","przegrana","nie_teraz")'),
+        supabase
+          .from('income')
+          .select('paid_amount')
+          .eq('status', 'oplacona')
+          .gte('paid_date', monthStart.slice(0, 10)),
+      ])
+
+      const revenue = (incomeRes.data ?? []).reduce(
+        (sum: number, row: { paid_amount: number | null }) => sum + (row.paid_amount ?? 0), 0
+      )
+
+      setKpi({
+        leadsThisMonth: leadsRes.count ?? 0,
+        activeDeals: dealsRes.count ?? 0,
+        revenueThisMonth: revenue,
+      })
+      setKpiLoading(false)
+    }
+    loadKpi()
+  }, [])
+
+  const kpiCards = [
+    { label: 'Leady w tym miesiącu', value: kpiLoading ? '…' : String(kpi.leadsThisMonth),      icon: Users,        color: '#6366f1', href: '/leads',    sub: 'dodane w tym miesiącu' },
+    { label: 'Aktywne deale',        value: kpiLoading ? '…' : String(kpi.activeDeals),          icon: TrendingUp,   color: '#22c55e', href: '/pipeline', sub: 'w toku (bez zakończonych)' },
+    { label: 'Reply rate',           value: '—',                                                  icon: MessageSquare,color: '#f59e0b', href: '/outreach', sub: 'wkrótce dostępne' },
+    { label: 'Przychód miesiąc',     value: kpiLoading ? '…' : formatPLN(kpi.revenueThisMonth), icon: DollarSign,   color: '#06b6d4', href: '/finance',  sub: 'opłacone faktury' },
+  ]
 
   return (
     <div className="max-w-[1400px] space-y-5">
@@ -47,7 +99,7 @@ export default function DashboardPage() {
 
       {/* KPI Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {KPI_CARDS.map((kpi) => (
+        {kpiCards.map((kpi) => (
           <Link
             key={kpi.label}
             href={kpi.href}
@@ -61,12 +113,12 @@ export default function DashboardPage() {
             </div>
             <p className="text-[11px] text-white/40 mb-1">{kpi.label}</p>
             <p className="text-[22px] font-bold text-white tracking-tight leading-none">{kpi.value}</p>
-            <p className="text-[11px] text-white/25 mt-2">Brak danych</p>
+            <p className="text-[11px] text-white/25 mt-2">{kpi.sub}</p>
           </Link>
         ))}
       </div>
 
-      {/* Cel miesięczny — pusty */}
+      {/* Cel miesięczny */}
       <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] p-4">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
@@ -121,7 +173,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Activity feed — empty */}
+        {/* Activity feed */}
         <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] p-5">
           <div className="flex items-center justify-between mb-4">
             <p className="text-[14px] font-semibold text-white">Ostatnia aktywność</p>
