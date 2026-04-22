@@ -6,7 +6,7 @@ import {
   Users, TrendingUp, MessageSquare, DollarSign, Target,
   ArrowUpRight, PlusCircle, MessageCircle, ReceiptText,
   ChevronRight, Clock, Zap, BookOpen, CheckSquare,
-  Square, Plus, X, Share2, Trash2,
+  Square, Plus, X, Share2, Trash2, Check,
 } from 'lucide-react'
 import { useAppUser } from '@/contexts/UserContext'
 import { createClient } from '@/lib/supabase/client'
@@ -30,7 +30,6 @@ function TasksWidget() {
   const [newTitle, setNewTitle] = useState('')
   const [shareWithMaciek, setShareWithMaciek] = useState(false)
   const [adding, setAdding] = useState(false)
-  const [showForm, setShowForm] = useState(false)
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -43,7 +42,6 @@ function TasksWidget() {
     })
     setNewTitle('')
     setShareWithMaciek(false)
-    setShowForm(false)
     setAdding(false)
   }
 
@@ -51,63 +49,47 @@ function TasksWidget() {
   const done = tasks.filter(t => t.completed)
 
   return (
-    <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] p-5">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <CheckSquare size={15} className="text-[#6366f1]" />
-          <p className="text-[14px] font-semibold text-white">Zadania na dziś</p>
-          {pending.length > 0 && (
-            <span className="px-1.5 py-0.5 rounded-full bg-[#6366f1]/20 text-[#a5b4fc] text-[10px] font-bold">{pending.length}</span>
-          )}
-        </div>
-        <button onClick={() => setShowForm(v => !v)}
-          className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] bg-[#6366f1]/15 border border-[#6366f1]/30 text-[#a5b4fc] text-[11px] font-medium hover:bg-[#6366f1]/25 transition-all">
-          <Plus size={12} /> Dodaj
-        </button>
+    <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] p-5 flex flex-col gap-4">
+      <div className="flex items-center gap-2">
+        <CheckSquare size={15} className="text-[#6366f1]" />
+        <p className="text-[14px] font-semibold text-white">Zadania na dziś</p>
+        {pending.length > 0 && (
+          <span className="px-1.5 py-0.5 rounded-full bg-[#6366f1]/20 text-[#a5b4fc] text-[10px] font-bold">{pending.length}</span>
+        )}
       </div>
 
-      {showForm && (
-        <form onSubmit={handleAdd} className="mb-4 p-3 rounded-[10px] bg-white/[0.03] border border-white/[0.07] space-y-2.5">
+      {/* Always-visible add form */}
+      <form onSubmit={handleAdd} className="space-y-2">
+        <div className="flex items-center gap-2">
           <input
             value={newTitle}
             onChange={e => setNewTitle(e.target.value)}
-            placeholder="Co masz do zrobienia?"
-            autoFocus
-            className="w-full px-3 py-2 rounded-[8px] bg-white/[0.04] border border-white/[0.08] text-white text-[13px] placeholder:text-white/25 focus:outline-none focus:border-[#6366f1]/50 transition-all"
+            placeholder="+ Dodaj zadanie na dziś..."
+            className="flex-1 px-3 py-2.5 rounded-[10px] bg-white/[0.04] border border-white/[0.08] text-white text-[13px] placeholder:text-white/30 focus:outline-none focus:border-[#6366f1]/60 transition-all"
           />
-          <div className="flex items-center justify-between">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <div onClick={() => setShareWithMaciek(v => !v)}
-                className={`w-4 h-4 rounded-[4px] border flex items-center justify-center transition-all ${shareWithMaciek ? 'bg-violet-500 border-violet-500' : 'bg-white/[0.04] border-white/[0.15]'}`}>
-                {shareWithMaciek && <CheckSquare size={10} className="text-white" />}
-              </div>
-              <div className="flex items-center gap-1 text-[12px] text-white/50">
-                <Share2 size={11} className="text-violet-400" />
-                Udostępnij Maćkowi
-              </div>
-            </label>
-            <div className="flex items-center gap-1.5">
-              <button type="button" onClick={() => setShowForm(false)}
-                className="px-2.5 py-1 rounded-[7px] bg-white/[0.04] text-white/40 text-[12px] hover:text-white transition-colors">
-                Anuluj
-              </button>
-              <button type="submit" disabled={adding || !newTitle.trim()}
-                className="px-3 py-1 rounded-[7px] bg-[#6366f1] text-white text-[12px] font-semibold disabled:opacity-50 hover:bg-[#5254cc] transition-all">
-                {adding ? '…' : 'Dodaj'}
-              </button>
-            </div>
-          </div>
-        </form>
-      )}
+          <button type="submit" disabled={adding || !newTitle.trim()}
+            className="flex-shrink-0 px-3.5 py-2.5 rounded-[10px] bg-[#6366f1] text-white text-[12px] font-bold disabled:opacity-40 hover:bg-[#5254cc] transition-all">
+            {adding ? '…' : <Plus size={16} />}
+          </button>
+        </div>
+        {newTitle.trim() && (
+          <label className="flex items-center gap-2 cursor-pointer px-1">
+            <button type="button" onClick={() => setShareWithMaciek(v => !v)}
+              className={`w-4 h-4 rounded-[4px] border flex items-center justify-center flex-shrink-0 transition-all ${shareWithMaciek ? 'bg-violet-500 border-violet-500' : 'bg-white/[0.04] border-white/[0.20]'}`}>
+              {shareWithMaciek && <Check size={10} className="text-white" />}
+            </button>
+            <span className="flex items-center gap-1 text-[12px] text-white/50">
+              <Share2 size={11} className="text-violet-400" />
+              Udostępnij Maćkowi
+            </span>
+          </label>
+        )}
+      </form>
 
       {loading ? (
-        <div className="py-6 text-center text-[12px] text-white/30">Ładowanie zadań…</div>
+        <div className="py-4 text-center text-[12px] text-white/30">Ładowanie…</div>
       ) : tasks.length === 0 ? (
-        <div className="py-8 text-center">
-          <CheckSquare size={28} className="text-white/10 mx-auto mb-2" />
-          <p className="text-[13px] text-white/25">Brak zadań</p>
-          <p className="text-[11px] text-white/15 mt-1">Dodaj pierwsze zadanie na dziś</p>
-        </div>
+        <p className="text-center text-[12px] text-white/20 py-2">Brak zadań — wpisz coś powyżej</p>
       ) : (
         <div className="space-y-1.5 max-h-[340px] overflow-y-auto">
           {pending.map(task => (
