@@ -79,9 +79,10 @@ Odpowiedz TYLKO JSON-em w tym formacie:
     if (leadId) {
       const supabase = await createClient()
       await supabase.from('leads').update({
-        ai_score: Math.round((result.total_score ?? 0) / 10),
-        ai_problem: result.problem ?? null,
-        ai_icebreaker: result.icebreaker ?? null,
+        ai_score_num:   result.total_score ?? 0,
+        ai_score_label: result.label ?? 'warm',
+        ai_problem:     result.problem ?? null,
+        ai_icebreaker:  result.icebreaker ?? null,
       }).eq('id', leadId)
     }
 

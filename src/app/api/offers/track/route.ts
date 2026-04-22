@@ -92,7 +92,7 @@ export async function POST(req: NextRequest) {
             deal_id: dealId,
             type: 'hot_lead',
             title: 'Gorący lead!',
-            message: `Klient otworzył ofertę ${count} razy w ciągu ostatniej godziny`,
+            body: `Klient otworzył ofertę ${count} razy w ciągu ostatniej godziny`,
             priority: 'urgent',
             is_read: false,
           }),

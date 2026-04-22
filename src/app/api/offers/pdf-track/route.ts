@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
         deal_id,
         type: 'pricing_viewed',
         title: 'Klient przejrzał sekcję wyceny w PDF',
-        message: 'Klient dotarł do strony 5 (Inwestycja) w ofercie PDF',
+        body: 'Klient dotarł do strony 5 (Inwestycja) w ofercie PDF',
         priority: 'high',
         is_read: false,
       })
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
           deal_id,
           type: 'hot_lead',
           title: 'Gorący lead — wielokrotnie otwiera PDF!',
-          message: `Klient otworzył PDF ${count} razy w ciągu ostatniej godziny`,
+          body: `Klient otworzył PDF ${count} razy w ciągu ostatniej godziny`,
           priority: 'urgent',
           is_read: false,
         }),

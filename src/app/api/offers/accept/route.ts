@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
         deal_id: dealId,
         type: 'offer_accepted',
         title: 'Klient zaakceptował ofertę!',
-        message: `${clientName} wybrał wariant "${variant_name}" — ${variant.price.toLocaleString('pl-PL')} PLN. Projekt rusza ${startDate}.`,
+        body: `${clientName} wybrał wariant "${variant_name}" — ${variant.price.toLocaleString('pl-PL')} PLN. Projekt rusza ${startDate}.`,
         priority: 'urgent',
         is_read: false,
         push_sent: false,

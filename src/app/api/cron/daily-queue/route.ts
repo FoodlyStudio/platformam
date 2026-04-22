@@ -19,9 +19,8 @@ export async function GET() {
       const { count: leadCount } = await supabaseAdmin
         .from('leads')
         .select('id', { count: 'exact', head: true })
-        .eq('user_id', user.id)
-        .eq('status', 'qualified')
-        .gte('ai_score', 5)
+        .in('app_status', ['nowy', 'kontakt', 'zainteresowany'])
+        .gte('ai_score_num', 50)
 
       if (leadCount && leadCount > 0) {
         await supabaseAdmin.from('notifications').insert({
