@@ -4,8 +4,9 @@ import { useState, useEffect } from 'react'
 import {
   FileText, ChevronRight, ChevronLeft, Loader2, Sparkles,
   Check, Building2, DollarSign, Calendar, Download,
-  CheckSquare, Square, User,
+  CheckSquare, Square, User, Briefcase,
 } from 'lucide-react'
+import { useServices, UNIT_LABELS } from '@/hooks/useServices'
 
 // ─── Modules config ───────────────────────────────────────────────────────────
 
@@ -58,13 +59,16 @@ function StepIndicator({ step }: { step: number }) {
 
 // ─── Generated offer preview ──────────────────────────────────────────────────
 
+interface SelectedService { id: string; name: string; desc: string; price: number; unit: string }
+
 function GeneratedOfferPreview({
-  client, contactPerson, preparedBy, modules, price, days,
+  client, contactPerson, preparedBy, modules, services, price, days,
 }: {
   client: string
   contactPerson: string
   preparedBy: string
   modules: string[]
+  services: SelectedService[]
   price: number
   days: number
 }) {
@@ -96,7 +100,7 @@ function GeneratedOfferPreview({
 
       <div className="px-6 py-5 space-y-5">
         {/* Scope */}
-        {selectedModules.length > 0 && (
+        {(selectedModules.length > 0 || services.length > 0) && (
           <div>
             <h2 className="text-[14px] font-bold text-gray-800 mb-2">Zakres wdrożenia</h2>
             <div className="space-y-1.5">
@@ -107,6 +111,16 @@ function GeneratedOfferPreview({
                     <span className="text-[12px] font-semibold text-gray-800">{m.label}</span>
                     <span className="text-[11px] text-gray-500 ml-2">{m.desc}</span>
                   </div>
+                </div>
+              ))}
+              {services.map(s => (
+                <div key={s.id} className="flex items-start gap-2 p-2.5 rounded-[8px] bg-indigo-50">
+                  <Check size={13} className="text-[#6366f1] flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <span className="text-[12px] font-semibold text-gray-800">{s.name}</span>
+                    {s.desc && <span className="text-[11px] text-gray-500 ml-2">{s.desc}</span>}
+                  </div>
+                  <span className="text-[11px] text-[#6366f1] font-semibold flex-shrink-0">{s.price.toLocaleString('pl-PL')} PLN {UNIT_LABELS[s.unit] ?? s.unit}</span>
                 </div>
               ))}
             </div>
@@ -174,6 +188,7 @@ function GeneratedOfferPreview({
 
 export default function OfferGeneratorPage() {
   const [step, setStep] = useState(1)
+  const { services: dbServices, loading: servicesLoading } = useServices()
 
   // Step 1
   const [crmLeads, setCrmLeads] = useState<StoredLead[]>([])
@@ -185,6 +200,7 @@ export default function OfferGeneratorPage() {
 
   // Step 2
   const [selectedModules, setMods] = useState<string[]>([])
+  const [selectedServices, setSelectedServices] = useState<string[]>([])
   const [customPrice, setCustomPrice] = useState('')
   const [days, setDays] = useState(14)
 
@@ -205,11 +221,21 @@ export default function OfferGeneratorPage() {
   const calcPrice = selectedModules.reduce((s, id) => {
     const m = MODULES.find(m => m.id === id)
     return s + (m?.price ?? 0)
+  }, 0) + selectedServices.reduce((s, id) => {
+    const svc = dbServices.find(s => s.id === id)
+    return s + (svc?.price_min ?? 0)
   }, 0)
   const finalPrice = customPrice ? parseInt(customPrice) || calcPrice : calcPrice
 
   const toggleModule = (id: string) =>
     setMods(prev => prev.includes(id) ? prev.filter(m => m !== id) : [...prev, id])
+
+  const toggleService = (id: string) =>
+    setSelectedServices(prev => prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id])
+
+  const chosenServices: SelectedService[] = dbServices
+    .filter(s => selectedServices.includes(s.id))
+    .map(s => ({ id: s.id, name: s.name, desc: s.description, price: s.price_min, unit: s.unit }))
 
   const handleGenerate = async () => {
     setLoading(true)
@@ -311,31 +337,76 @@ export default function OfferGeneratorPage() {
           {step === 2 && (
             <div className="space-y-5">
               <div className="flex items-center justify-between">
-                <h2 className="text-[15px] font-semibold text-white">Wybierz moduły</h2>
-                <span className="text-[12px] text-white/40">{selectedModules.length} zaznaczone</span>
+                <h2 className="text-[15px] font-semibold text-white">Wybierz moduły i usługi</h2>
+                <span className="text-[12px] text-white/40">{selectedModules.length + selectedServices.length} zaznaczone</span>
               </div>
-              <div className="space-y-2">
-                {MODULES.map(m => {
-                  const selected = selectedModules.includes(m.id)
-                  return (
-                    <button key={m.id} onClick={() => toggleModule(m.id)}
-                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-[10px] border text-left transition-all ${
-                        selected ? 'bg-[#6366f1]/10 border-[#6366f1]/35' : 'bg-white/[0.03] border-white/[0.07] hover:border-white/15'
-                      }`}>
-                      <div className={`flex-shrink-0 transition-colors ${selected ? 'text-[#6366f1]' : 'text-white/20'}`}>
-                        {selected ? <CheckSquare size={16} /> : <Square size={16} />}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className={`text-[13px] font-semibold ${selected ? 'text-white' : 'text-white/60'}`}>{m.label}</p>
-                        <p className="text-[11px] text-white/35 truncate">{m.desc}</p>
-                      </div>
-                      <span className={`text-[11px] font-semibold flex-shrink-0 ${selected ? 'text-[#6366f1]' : 'text-white/30'}`}>
-                        {m.price.toLocaleString('pl-PL')} PLN
-                      </span>
-                    </button>
-                  )
-                })}
+
+              {/* Hardcoded modules */}
+              <div>
+                <p className="text-[10px] font-semibold text-white/35 uppercase tracking-wide mb-2">Moduły platformy</p>
+                <div className="space-y-2">
+                  {MODULES.map(m => {
+                    const selected = selectedModules.includes(m.id)
+                    return (
+                      <button key={m.id} onClick={() => toggleModule(m.id)}
+                        className={`w-full flex items-center gap-3 px-4 py-3 rounded-[10px] border text-left transition-all ${
+                          selected ? 'bg-[#6366f1]/10 border-[#6366f1]/35' : 'bg-white/[0.03] border-white/[0.07] hover:border-white/15'
+                        }`}>
+                        <div className={`flex-shrink-0 transition-colors ${selected ? 'text-[#6366f1]' : 'text-white/20'}`}>
+                          {selected ? <CheckSquare size={16} /> : <Square size={16} />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-[13px] font-semibold ${selected ? 'text-white' : 'text-white/60'}`}>{m.label}</p>
+                          <p className="text-[11px] text-white/35 truncate">{m.desc}</p>
+                        </div>
+                        <span className={`text-[11px] font-semibold flex-shrink-0 ${selected ? 'text-[#6366f1]' : 'text-white/30'}`}>
+                          {m.price.toLocaleString('pl-PL')} PLN
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
+
+              {/* Your services from DB */}
+              {dbServices.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-semibold text-white/35 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                    <Briefcase size={10} /> Twoje usługi
+                  </p>
+                  <div className="space-y-2">
+                    {servicesLoading ? (
+                      <div className="flex items-center gap-2 text-white/30 text-[12px] py-2">
+                        <Loader2 size={13} className="animate-spin" /> Ładowanie usług...
+                      </div>
+                    ) : (
+                      dbServices.map(s => {
+                        const selected = selectedServices.includes(s.id)
+                        const priceLabel = s.price_min === s.price_max
+                          ? `${s.price_min.toLocaleString('pl-PL')} PLN`
+                          : `${s.price_min.toLocaleString('pl-PL')}–${s.price_max.toLocaleString('pl-PL')} PLN`
+                        return (
+                          <button key={s.id} onClick={() => toggleService(s.id)}
+                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-[10px] border text-left transition-all ${
+                              selected ? 'bg-violet-500/10 border-violet-500/35' : 'bg-white/[0.03] border-white/[0.07] hover:border-white/15'
+                            }`}>
+                            <div className={`flex-shrink-0 transition-colors ${selected ? 'text-violet-400' : 'text-white/20'}`}>
+                              {selected ? <CheckSquare size={16} /> : <Square size={16} />}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className={`text-[13px] font-semibold ${selected ? 'text-white' : 'text-white/60'}`}>{s.name}</p>
+                              {s.description && <p className="text-[11px] text-white/35 truncate">{s.description}</p>}
+                            </div>
+                            <span className={`text-[11px] font-semibold flex-shrink-0 ${selected ? 'text-violet-400' : 'text-white/30'}`}>
+                              {priceLabel}
+                            </span>
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -362,7 +433,7 @@ export default function OfferGeneratorPage() {
                   className="flex items-center gap-1.5 px-4 py-2.5 rounded-[10px] bg-white/[0.05] border border-white/[0.09] text-white/55 text-[13px] font-medium hover:text-white transition-all">
                   <ChevronLeft size={14} /> Wstecz
                 </button>
-                <button onClick={() => setStep(3)} disabled={selectedModules.length === 0}
+                <button onClick={() => setStep(3)} disabled={selectedModules.length === 0 && selectedServices.length === 0}
                   className="flex items-center gap-2 px-5 py-2.5 rounded-[10px] bg-[#6366f1] hover:bg-[#5254cc] disabled:opacity-50 text-white text-[13px] font-semibold transition-all">
                   Dalej <ChevronRight size={15} />
                 </button>
@@ -449,6 +520,7 @@ export default function OfferGeneratorPage() {
               contactPerson={finalContact}
               preparedBy={preparedBy}
               modules={selectedModules}
+              services={chosenServices}
               price={finalPrice}
               days={days}
             />

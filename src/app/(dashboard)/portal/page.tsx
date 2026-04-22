@@ -3,8 +3,9 @@
 import { useState } from 'react'
 import {
   Globe, Copy, Check, Download, Eye, Clock,
-  CheckCircle2, FileText, AlertCircle, Plus, Trash2,
+  CheckCircle2, FileText, AlertCircle, Plus, Trash2, Briefcase,
 } from 'lucide-react'
+import { useServices } from '@/hooks/useServices'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -206,6 +207,7 @@ function OfferPreview({ offer }: { offer: OfferData }) {
 
 export default function PortalPage() {
   const [offer, setOffer] = useState<OfferData>(EMPTY_OFFER)
+  const { services: dbServices } = useServices()
 
   const setField = (k: keyof OfferData) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setOffer(prev => ({ ...prev, [k]: k === 'price' || k === 'deposit' ? Number(e.target.value) || 0 : e.target.value }))
@@ -267,6 +269,27 @@ export default function PortalPage() {
               placeholder="Opisz problem biznesowy klienta który rozwiązujesz..."
               className={`${inputClass} resize-none`} />
           </div>
+
+          {/* Services quick-add from catalog */}
+          {dbServices.length > 0 && (
+            <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] p-4 space-y-2">
+              <p className="text-[11px] font-semibold text-white/40 uppercase tracking-wide flex items-center gap-1.5">
+                <Briefcase size={10} /> Dodaj z katalogu usług
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {dbServices.map(s => (
+                  <button key={s.id}
+                    onClick={() => setOffer(prev => ({
+                      ...prev,
+                      solution: [...prev.solution, { item: s.name, desc: s.description }],
+                    }))}
+                    className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 transition-all">
+                    + {s.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Solution */}
           <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] p-5 space-y-3">

@@ -5,10 +5,12 @@ import {
   BookOpen, Building2, Globe, ExternalLink,
   Target, Lightbulb, Package, MessageSquare, Save,
   CheckCircle2, Loader2, ChevronDown, ChevronUp, Plus, Trash2,
-  Link as LinkIcon, AtSign,
+  Link as LinkIcon, AtSign, Pencil, X,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import toast from 'react-hot-toast'
+import { useServices, UNIT_LABELS } from '@/hooks/useServices'
+import type { Service as SvcType } from '@/hooks/useServices'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -142,11 +144,97 @@ const inputCls = `
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+// ─── Service editor modal ─────────────────────────────────────────────────────
+
+const EMPTY_SVC: Omit<SvcType, 'id' | 'created_at'> = {
+  name: '', description: '', price_min: 0, price_max: 0,
+  unit: 'projekt', deliverables: '', duration: '', is_active: true, sort_order: 0,
+}
+
+function ServiceModal({
+  initial, onSave, onClose,
+}: {
+  initial?: SvcType | null
+  onSave: (data: Omit<SvcType, 'id' | 'created_at'>) => void
+  onClose: () => void
+}) {
+  const [form, setForm] = useState<Omit<SvcType, 'id' | 'created_at'>>(
+    initial ? { ...initial } : { ...EMPTY_SVC }
+  )
+  const set = <K extends keyof typeof form>(k: K, v: typeof form[K]) => setForm(f => ({ ...f, [k]: v }))
+  const iCls = `w-full px-3 py-2.5 rounded-[10px] bg-white/[0.05] border border-white/[0.08] text-white placeholder:text-white/25 text-[13px] focus:outline-none focus:border-[#6366f1]/60 transition-all resize-none`
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-[#16213E] border border-white/[0.1] rounded-[16px] w-full max-w-lg p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <p className="text-[15px] font-bold text-white">{initial ? 'Edytuj usługę' : 'Nowa usługa'}</p>
+          <button onClick={onClose} className="p-1.5 rounded-[6px] text-white/30 hover:text-white hover:bg-white/[0.06] transition-all"><X size={15} /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="block text-[11px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Nazwa usługi *</label>
+            <input className={iCls} placeholder="np. Strona www + CMS" value={form.name} onChange={e => set('name', e.target.value)} />
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="col-span-1">
+              <label className="block text-[11px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Rozliczenie</label>
+              <select className={iCls} value={form.unit} onChange={e => set('unit', e.target.value)}>
+                {Object.entries(UNIT_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Cena min (PLN)</label>
+              <input className={iCls} type="number" placeholder="3000" value={form.price_min || ''} onChange={e => set('price_min', parseInt(e.target.value) || 0)} />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Cena max (PLN)</label>
+              <input className={iCls} type="number" placeholder="8000" value={form.price_max || ''} onChange={e => set('price_max', parseInt(e.target.value) || 0)} />
+            </div>
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Opis (co zawiera, dla kogo)</label>
+            <textarea className={iCls} rows={3} placeholder="Responsywna strona www na Next.js z CMS. Projekt UI, treści, SEO on-page..." value={form.description} onChange={e => set('description', e.target.value)} />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-[11px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Czas realizacji</label>
+              <input className={iCls} placeholder="np. 4-6 tygodni" value={form.duration} onChange={e => set('duration', e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Kolejność</label>
+              <input className={iCls} type="number" placeholder="0" value={form.sort_order} onChange={e => set('sort_order', parseInt(e.target.value) || 0)} />
+            </div>
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-white/40 uppercase tracking-wide mb-1.5">Co dostajesz (deliverables)</label>
+            <textarea className={iCls} rows={2} placeholder="Projekt Figma, kod źródłowy, hosting 1 rok, szkolenie 2h..." value={form.deliverables} onChange={e => set('deliverables', e.target.value)} />
+          </div>
+        </div>
+        <div className="flex gap-2 pt-2">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-[10px] bg-white/[0.04] border border-white/[0.08] text-white/50 text-[13px] font-medium hover:bg-white/[0.08] hover:text-white transition-all">Anuluj</button>
+          <button
+            onClick={() => { if (form.name.trim()) { onSave(form); onClose() } }}
+            disabled={!form.name.trim()}
+            className="flex-1 py-2.5 rounded-[10px] bg-[#6366f1] hover:bg-[#5254cc] text-white text-[13px] font-semibold transition-all disabled:opacity-50"
+          >
+            {initial ? 'Zapisz zmiany' : 'Dodaj usługę'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
 export default function KnowledgeBasePage() {
   const [profile, setProfile] = useState<CompanyProfile>(EMPTY_PROFILE)
   const [saving, setSaving]   = useState(false)
   const [saved, setSaved]     = useState(false)
   const [loadingInit, setLoadingInit] = useState(true)
+  const { services, create: createSvc, update: updateSvc, remove: removeSvc } = useServices()
+  const [svcModal, setSvcModal] = useState<{ open: boolean; editing: SvcType | null }>({ open: false, editing: null })
 
   const supabase = createClient()
 
@@ -385,72 +473,67 @@ export default function KnowledgeBasePage() {
         </div>
       </Section>
 
-      {/* ─── SEKCJA 3: Usługi ───────────────────────────────────────────────── */}
-      <Section icon={Package} title="Usługi i cennik" subtitle="Co oferujesz i za ile?">
+      {/* ─── SEKCJA 3: Usługi (services table) ─────────────────────────────── */}
+      <Section icon={Package} title="Katalog usług" subtitle="Twoje usługi — używane w generatorze ofert, leadach i pipeline">
         <div className="space-y-3">
-          {profile.services.map((svc, i) => (
-            <div key={i} className="p-4 rounded-[10px] bg-white/[0.03] border border-white/[0.06] space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[12px] font-semibold text-white/50 uppercase tracking-wide">Usługa {i + 1}</span>
-                {profile.services.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => removeService(i)}
-                    className="p-1.5 rounded-[6px] text-red-400/50 hover:text-red-400 hover:bg-red-400/10 transition-all"
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                )}
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <Field label="Nazwa usługi">
-                  <input
-                    className={inputCls}
-                    placeholder="np. Strona www + CMS"
-                    value={svc.name}
-                    onChange={e => updateService(i, 'name', e.target.value)}
-                  />
-                </Field>
-                <div className="grid grid-cols-2 gap-2">
-                  <Field label="Cena min (PLN)">
-                    <input
-                      className={inputCls}
-                      placeholder="3000"
-                      value={svc.price_min}
-                      onChange={e => updateService(i, 'price_min', e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Cena max (PLN)">
-                    <input
-                      className={inputCls}
-                      placeholder="8000"
-                      value={svc.price_max}
-                      onChange={e => updateService(i, 'price_max', e.target.value)}
-                    />
-                  </Field>
+          {services.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-8 rounded-[10px] border border-dashed border-white/10 bg-white/[0.02]">
+              <Package size={24} className="text-white/20 mb-2" />
+              <p className="text-[12px] text-white/30">Brak usług — dodaj pierwszą poniżej</p>
+            </div>
+          )}
+          {services.map(svc => (
+            <div key={svc.id} className="flex items-start gap-3 p-4 rounded-[12px] bg-white/[0.03] border border-white/[0.06] hover:border-white/[0.1] transition-all">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <p className="text-[14px] font-semibold text-white truncate">{svc.name}</p>
+                  <span className="px-2 py-0.5 rounded-full bg-[#6366f1]/15 text-[#a5b4fc] text-[10px] font-semibold whitespace-nowrap">
+                    {svc.price_min > 0 && svc.price_max > 0
+                      ? `${svc.price_min.toLocaleString('pl-PL')} – ${svc.price_max.toLocaleString('pl-PL')} PLN`
+                      : svc.price_min > 0 ? `od ${svc.price_min.toLocaleString('pl-PL')} PLN`
+                      : 'cena do ustalenia'
+                    } {UNIT_LABELS[svc.unit] ?? svc.unit}
+                  </span>
+                  {svc.duration && <span className="text-[10px] text-white/30">{svc.duration}</span>}
                 </div>
+                {svc.description && <p className="text-[12px] text-white/50 line-clamp-2">{svc.description}</p>}
+                {svc.deliverables && <p className="text-[11px] text-white/30 mt-0.5 line-clamp-1">✓ {svc.deliverables}</p>}
               </div>
-              <Field label="Opis usługi (co dostaję, co zawiera?)">
-                <textarea
-                  className={inputCls}
-                  rows={2}
-                  placeholder="np. Responsywna strona www na Next.js z panelem CMS. Wdrożenie w 14 dni. Obejmuje projekt UI, treści i SEO on-page."
-                  value={svc.description}
-                  onChange={e => updateService(i, 'description', e.target.value)}
-                />
-              </Field>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={() => setSvcModal({ open: true, editing: svc })}
+                  className="p-1.5 rounded-[6px] text-white/30 hover:text-white hover:bg-white/[0.06] transition-all"
+                ><Pencil size={13} /></button>
+                <button
+                  onClick={() => removeSvc(svc.id)}
+                  className="p-1.5 rounded-[6px] text-red-400/40 hover:text-red-400 hover:bg-red-400/10 transition-all"
+                ><Trash2 size={13} /></button>
+              </div>
             </div>
           ))}
-
           <button
             type="button"
-            onClick={addService}
-            className="flex items-center gap-2 px-3 py-2 rounded-[8px] border border-dashed border-white/20 text-white/40 hover:text-white/70 hover:border-white/30 text-[12px] font-medium transition-all w-full justify-center"
+            onClick={() => setSvcModal({ open: true, editing: null })}
+            className="flex items-center gap-2 px-3 py-2.5 rounded-[10px] border border-dashed border-[#6366f1]/30 text-[#a5b4fc] hover:bg-[#6366f1]/10 hover:border-[#6366f1]/50 text-[12px] font-medium transition-all w-full justify-center"
           >
-            <Plus size={14} /> Dodaj kolejną usługę
+            <Plus size={14} /> Dodaj usługę
           </button>
         </div>
       </Section>
+
+      {svcModal.open && (
+        <ServiceModal
+          initial={svcModal.editing}
+          onClose={() => setSvcModal({ open: false, editing: null })}
+          onSave={data => {
+            if (svcModal.editing) {
+              updateSvc(svcModal.editing.id, data)
+            } else {
+              createSvc(data)
+            }
+          }}
+        />
+      )}
 
       {/* ─── SEKCJA 4: Linki ────────────────────────────────────────────────── */}
       <Section icon={LinkIcon} title="Linki do profili i strony" subtitle="AI może analizować Twój profil LinkedIn i stronę">

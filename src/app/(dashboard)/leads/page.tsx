@@ -3,13 +3,14 @@
 import { useState, useMemo, useEffect, useCallback } from 'react'
 import {
   Search, X, Flame, Thermometer, Snowflake,
-  Phone, Mail, Globe, Calendar,
+  Phone, Mail, Globe, Calendar, Check,
   MessageSquare, TrendingUp, SlidersHorizontal, CheckCircle2,
   Download, Link2, Share2, Brain, Plus, Loader2,
   Send, StickyNote, ChevronDown, Pencil, Trash2, ArrowUpDown,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { createClient } from '@/lib/supabase/client'
+import { useServices } from '@/hooks/useServices'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -36,6 +37,7 @@ interface Lead {
   instagram?: string
   notes?: string
   scanData?: string
+  service_ids?: string[]
   outreachHistory: { date: string; type: string; content: string }[]
 }
 
@@ -63,6 +65,7 @@ function dbToLead(row: Record<string, unknown>): Lead {
     instagram: (row.instagram_url as string) ?? undefined,
     notes: (row.notes as string) ?? undefined,
     scanData: (row.scan_data as string) ?? undefined,
+    service_ids: (row.service_ids as string[]) ?? [],
     outreachHistory: (row.outreach_history as Lead['outreachHistory']) ?? [],
   }
 }
@@ -88,6 +91,7 @@ function leadToDb(lead: Lead) {
     instagram_url: lead.instagram ?? null,
     notes: lead.notes ?? null,
     scan_data: lead.scanData ?? null,
+    service_ids: lead.service_ids ?? [],
     outreach_history: lead.outreachHistory,
   }
 }
@@ -878,7 +882,16 @@ function LeadPanel({
   const [showNote, setShowNote] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
   const [statusOpen, setStatusOpen] = useState(false)
+  const { services: allServices } = useServices()
   const initials = (currentLead.firstName[0] ?? '') + (currentLead.lastName[0] ?? '')
+
+  const toggleServiceForLead = async (serviceId: string) => {
+    const current = currentLead.service_ids ?? []
+    const updated = current.includes(serviceId)
+      ? current.filter(id => id !== serviceId)
+      : [...current, serviceId]
+    await update({ service_ids: updated })
+  }
 
   const update = useCallback(async (partial: Partial<Lead>) => {
     const updated = { ...currentLead, ...partial }
@@ -1047,6 +1060,28 @@ function LeadPanel({
                   <button onClick={() => setShowNote(true)} className="text-[10px] text-[#a5b4fc] hover:text-white transition-colors">Edytuj</button>
                 </div>
                 <p className="text-[12px] text-white/65">{currentLead.notes}</p>
+              </div>
+            )}
+
+            {/* Services */}
+            {allServices.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold text-white/40 uppercase tracking-wide mb-2">Przypisane usługi</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {allServices.map(s => {
+                    const assigned = (currentLead.service_ids ?? []).includes(s.id)
+                    return (
+                      <button key={s.id} onClick={() => void toggleServiceForLead(s.id)}
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-medium border transition-all ${
+                          assigned
+                            ? 'bg-violet-500/20 border-violet-500/40 text-violet-300'
+                            : 'bg-white/[0.04] border-white/[0.08] text-white/35 hover:border-white/20 hover:text-white/60'
+                        }`}>
+                        {assigned ? <Check size={9} className="inline mr-1" /> : null}{s.name}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
             )}
 

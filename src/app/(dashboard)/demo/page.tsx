@@ -5,10 +5,12 @@ import Link from 'next/link'
 import {
   Users, TrendingUp, MessageSquare, DollarSign, Target,
   ArrowUpRight, PlusCircle, MessageCircle, ReceiptText,
-  ChevronRight, Clock, Zap, BookOpen,
+  ChevronRight, Clock, Zap, BookOpen, CheckSquare,
+  Square, Plus, X, Share2, Trash2,
 } from 'lucide-react'
 import { useAppUser } from '@/contexts/UserContext'
 import { createClient } from '@/lib/supabase/client'
+import { useTasks } from '@/hooks/useTasks'
 
 interface KpiData {
   leadsThisMonth: number
@@ -19,6 +21,135 @@ interface KpiData {
 function formatPLN(value: number): string {
   if (value >= 1000) return (value / 1000).toFixed(0) + ' tys. PLN'
   return value + ' PLN'
+}
+
+// ─── Tasks Widget ─────────────────────────────────────────────────────────────
+
+function TasksWidget() {
+  const { tasks, loading, create, toggle, remove } = useTasks()
+  const [newTitle, setNewTitle] = useState('')
+  const [shareWithMaciek, setShareWithMaciek] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [showForm, setShowForm] = useState(false)
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newTitle.trim()) return
+    setAdding(true)
+    await create({
+      title: newTitle.trim(),
+      assigned_to: shareWithMaciek ? 'maciek' : undefined,
+      due_date: new Date().toISOString().slice(0, 10),
+    })
+    setNewTitle('')
+    setShareWithMaciek(false)
+    setShowForm(false)
+    setAdding(false)
+  }
+
+  const pending = tasks.filter(t => !t.completed)
+  const done = tasks.filter(t => t.completed)
+
+  return (
+    <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <CheckSquare size={15} className="text-[#6366f1]" />
+          <p className="text-[14px] font-semibold text-white">Zadania na dziś</p>
+          {pending.length > 0 && (
+            <span className="px-1.5 py-0.5 rounded-full bg-[#6366f1]/20 text-[#a5b4fc] text-[10px] font-bold">{pending.length}</span>
+          )}
+        </div>
+        <button onClick={() => setShowForm(v => !v)}
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] bg-[#6366f1]/15 border border-[#6366f1]/30 text-[#a5b4fc] text-[11px] font-medium hover:bg-[#6366f1]/25 transition-all">
+          <Plus size={12} /> Dodaj
+        </button>
+      </div>
+
+      {showForm && (
+        <form onSubmit={handleAdd} className="mb-4 p-3 rounded-[10px] bg-white/[0.03] border border-white/[0.07] space-y-2.5">
+          <input
+            value={newTitle}
+            onChange={e => setNewTitle(e.target.value)}
+            placeholder="Co masz do zrobienia?"
+            autoFocus
+            className="w-full px-3 py-2 rounded-[8px] bg-white/[0.04] border border-white/[0.08] text-white text-[13px] placeholder:text-white/25 focus:outline-none focus:border-[#6366f1]/50 transition-all"
+          />
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <div onClick={() => setShareWithMaciek(v => !v)}
+                className={`w-4 h-4 rounded-[4px] border flex items-center justify-center transition-all ${shareWithMaciek ? 'bg-violet-500 border-violet-500' : 'bg-white/[0.04] border-white/[0.15]'}`}>
+                {shareWithMaciek && <CheckSquare size={10} className="text-white" />}
+              </div>
+              <div className="flex items-center gap-1 text-[12px] text-white/50">
+                <Share2 size={11} className="text-violet-400" />
+                Udostępnij Maćkowi
+              </div>
+            </label>
+            <div className="flex items-center gap-1.5">
+              <button type="button" onClick={() => setShowForm(false)}
+                className="px-2.5 py-1 rounded-[7px] bg-white/[0.04] text-white/40 text-[12px] hover:text-white transition-colors">
+                Anuluj
+              </button>
+              <button type="submit" disabled={adding || !newTitle.trim()}
+                className="px-3 py-1 rounded-[7px] bg-[#6366f1] text-white text-[12px] font-semibold disabled:opacity-50 hover:bg-[#5254cc] transition-all">
+                {adding ? '…' : 'Dodaj'}
+              </button>
+            </div>
+          </div>
+        </form>
+      )}
+
+      {loading ? (
+        <div className="py-6 text-center text-[12px] text-white/30">Ładowanie zadań…</div>
+      ) : tasks.length === 0 ? (
+        <div className="py-8 text-center">
+          <CheckSquare size={28} className="text-white/10 mx-auto mb-2" />
+          <p className="text-[13px] text-white/25">Brak zadań</p>
+          <p className="text-[11px] text-white/15 mt-1">Dodaj pierwsze zadanie na dziś</p>
+        </div>
+      ) : (
+        <div className="space-y-1.5 max-h-[340px] overflow-y-auto">
+          {pending.map(task => (
+            <div key={task.id} className="flex items-start gap-2.5 p-2.5 rounded-[8px] bg-white/[0.03] hover:bg-white/[0.05] group transition-colors">
+              <button onClick={() => void toggle(task.id)} className="flex-shrink-0 mt-0.5 text-white/30 hover:text-[#6366f1] transition-colors">
+                <Square size={15} />
+              </button>
+              <div className="flex-1 min-w-0">
+                <p className="text-[13px] text-white leading-tight">{task.title}</p>
+                {task.assigned_to === 'maciek' && (
+                  <span className="inline-flex items-center gap-1 mt-1 text-[10px] text-violet-400/70">
+                    <Share2 size={9} /> Udostępnione Maćkowi
+                  </span>
+                )}
+              </div>
+              <button onClick={() => void remove(task.id)}
+                className="flex-shrink-0 opacity-0 group-hover:opacity-100 text-white/25 hover:text-red-400 transition-all p-0.5">
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+          {done.length > 0 && (
+            <div className="pt-1 mt-1 border-t border-white/[0.05]">
+              <p className="text-[10px] font-semibold text-white/25 uppercase tracking-wide px-1 mb-1.5">Ukończone ({done.length})</p>
+              {done.map(task => (
+                <div key={task.id} className="flex items-start gap-2.5 p-2 rounded-[8px] group">
+                  <button onClick={() => void toggle(task.id)} className="flex-shrink-0 mt-0.5 text-[#6366f1]/50 hover:text-[#6366f1] transition-colors">
+                    <CheckSquare size={15} />
+                  </button>
+                  <p className="flex-1 text-[12px] text-white/30 line-through leading-tight">{task.title}</p>
+                  <button onClick={() => void remove(task.id)}
+                    className="flex-shrink-0 opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400/60 transition-all p-0.5">
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function DashboardPage() {
@@ -138,8 +269,8 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Grid: start guide + activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_350px] gap-4">
+      {/* Grid: start guide + tasks */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-4">
 
         {/* Quick start */}
         <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] p-5">
@@ -173,22 +304,8 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Activity feed */}
-        <div className="bg-[#16213E] border border-white/[0.07] rounded-[14px] p-5">
-          <div className="flex items-center justify-between mb-4">
-            <p className="text-[14px] font-semibold text-white">Ostatnia aktywność</p>
-            <Clock size={13} className="text-white/30" />
-          </div>
-          <div className="flex flex-col items-center justify-center py-10 gap-3">
-            <div className="w-10 h-10 rounded-full bg-white/[0.05] flex items-center justify-center">
-              <Clock size={18} className="text-white/20" />
-            </div>
-            <p className="text-[13px] text-white/30 text-center">Brak aktywności</p>
-            <p className="text-[11px] text-white/20 text-center leading-relaxed">
-              Tutaj pojawią się akcje:<br />dodane leady, wygenerowane wiadomości,<br />zmiany w pipeline.
-            </p>
-          </div>
-        </div>
+        {/* Tasks widget */}
+        <TasksWidget />
       </div>
 
     </div>

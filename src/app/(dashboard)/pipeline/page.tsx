@@ -4,10 +4,11 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Flame, Thermometer, Snowflake, X, Phone, Mail, Calendar,
   FileText, MessageSquare, DollarSign, User, Building2, Tag, CheckCircle2,
-  Loader2, AlertCircle, Send, ExternalLink,
+  Loader2, AlertCircle, Send, ExternalLink, Check,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { useServices } from '@/hooks/useServices'
 
 // ─── Stage config (keys match DB values) ─────────────────────────────────────
 
@@ -54,6 +55,7 @@ export interface Deal {
   project_scope: string | null
   notes: string | null
   assigned_to: string | null
+  service_ids?: string[]
 }
 
 // ─── Badge helpers ────────────────────────────────────────────────────────────
@@ -109,7 +111,7 @@ function DealCard({ deal, onClick }: { deal: Deal; onClick: () => void }) {
 // ─── Deal Detail Modal ────────────────────────────────────────────────────────
 
 function DealModal({
-  deal,
+  deal: initialDeal,
   onClose,
   onStageChange,
 }: {
@@ -117,6 +119,7 @@ function DealModal({
   onClose: () => void
   onStageChange: (id: string, stage: DealStage) => Promise<void>
 }) {
+  const [deal, setDeal] = useState(initialDeal)
   const stage = STAGE_CONFIG[deal.stage]
   const displayName = deal.contact_name || deal.title
   const initials = displayName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
@@ -126,6 +129,17 @@ function DealModal({
   const [dmVariants, setDmVariants] = useState<Array<{ message: string } | null>>([null, null])
   const [dmCopied, setDmCopied] = useState<number | null>(null)
   const router = useRouter()
+  const { services: allServices } = useServices()
+
+  const toggleDealService = async (serviceId: string) => {
+    const current = deal.service_ids ?? []
+    const updated = current.includes(serviceId)
+      ? current.filter(id => id !== serviceId)
+      : [...current, serviceId]
+    const supabase = createClient()
+    await supabase.from('deals').update({ service_ids: updated }).eq('id', deal.id)
+    setDeal(d => ({ ...d, service_ids: updated }))
+  }
 
   const handleStageChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     setSaving(true)
@@ -266,6 +280,28 @@ function DealModal({
             <div className="p-3 rounded-[10px] bg-white/[0.03] border border-white/[0.05]">
               <p className="text-[10px] font-semibold text-white/40 uppercase tracking-wide mb-1">Notatki</p>
               <p className="text-[12px] text-white/65 whitespace-pre-wrap">{deal.notes}</p>
+            </div>
+          )}
+
+          {/* Services */}
+          {allServices.length > 0 && (
+            <div>
+              <p className="text-[11px] font-semibold text-white/40 uppercase tracking-wide mb-2">Przypisane usługi</p>
+              <div className="flex flex-wrap gap-1.5">
+                {allServices.map(s => {
+                  const assigned = (deal.service_ids ?? []).includes(s.id)
+                  return (
+                    <button key={s.id} onClick={() => void toggleDealService(s.id)}
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-medium border transition-all ${
+                        assigned
+                          ? 'bg-violet-500/20 border-violet-500/40 text-violet-300'
+                          : 'bg-white/[0.04] border-white/[0.08] text-white/35 hover:border-white/20 hover:text-white/60'
+                      }`}>
+                      {assigned && <Check size={9} className="inline mr-1" />}{s.name}
+                    </button>
+                  )
+                })}
+              </div>
             </div>
           )}
 
