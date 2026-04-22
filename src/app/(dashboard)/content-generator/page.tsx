@@ -129,6 +129,13 @@ function TopicSuggestions({ onSelect, channel }: { onSelect: (t: string) => void
 
 // ─── Instagram tab ────────────────────────────────────────────────────────────
 
+// Parse [Slajd N] blocks from generated content_body
+function parseSlides(body: string): { num: number; text: string }[] {
+  const parts = body.split(/\[Slajd \d+\]/).filter(s => s.trim())
+  const nums  = [...body.matchAll(/\[Slajd (\d+)\]/g)].map(m => parseInt(m[1]))
+  return parts.map((text, i) => ({ num: nums[i] ?? i + 1, text: text.trim() }))
+}
+
 function InstagramTab() {
   const [topic, setTopic]             = useState('')
   const [contentDesc, setContentDesc] = useState('')
@@ -139,6 +146,39 @@ function InstagramTab() {
   const [loading, setLoading]         = useState(false)
   const [result, setResult]           = useState<GeneratedContent | null>(null)
   const [error, setError]             = useState<string | null>(null)
+  const [slideImages, setSlideImages] = useState<Record<number, string>>({})
+  const [generatingImages, setGeneratingImages] = useState(false)
+  const [imageError, setImageError]   = useState<string | null>(null)
+
+  const generateImages = async () => {
+    if (!result) return
+    setGeneratingImages(true)
+    setImageError(null)
+    setSlideImages({})
+
+    const slides = parseSlides(result.content_body)
+    const style  = graphicStyle || 'minimalist, dark background, bold typography, professional'
+
+    await Promise.all(
+      slides.map(async (slide) => {
+        const prompt = `Instagram carousel slide image. Topic: "${topic}". Slide content: ${slide.text.slice(0, 200)}. Visual style: ${style}. No text on image. Clean, modern, social media ready, high quality.`
+        try {
+          const res = await fetch('/api/ai/generate-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt, aspectRatio: '1:1' }),
+          })
+          const data = await res.json()
+          if (data.images?.[0]) {
+            setSlideImages(prev => ({ ...prev, [slide.num]: data.images[0] }))
+          }
+        } catch {
+          // continue — show what we have
+        }
+      })
+    )
+    setGeneratingImages(false)
+  }
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -308,9 +348,6 @@ function InstagramTab() {
               >
                 <RefreshCw size={11} /> Regeneruj
               </button>
-              <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] bg-pink-500/10 border border-pink-500/25 text-pink-400 text-[11px] font-medium hover:bg-pink-500/20 transition-all">
-                <ExternalLink size={11} /> Kopiuj do Canva
-              </button>
             </div>
           </div>
 
@@ -324,6 +361,72 @@ function InstagramTab() {
           <div className="bg-[#0F0F1A] border border-white/[0.07] rounded-[10px] p-4">
             <p className="text-[10px] font-semibold text-white/35 uppercase tracking-wide mb-2">Treść karuzeli ({slideCount} slajdów)</p>
             <pre className="text-[12px] text-white/70 leading-relaxed whitespace-pre-wrap font-sans">{result.content_body}</pre>
+          </div>
+
+          {/* ── Gemini Image Generation ── */}
+          <div className="border border-white/[0.07] rounded-[12px] overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 bg-white/[0.02]">
+              <div className="flex items-center gap-2">
+                <ImageIcon size={13} className="text-[#a5b4fc]" />
+                <p className="text-[12px] font-semibold text-white">Grafiki AI (Gemini Imagen)</p>
+                {Object.keys(slideImages).length > 0 && (
+                  <span className="text-[10px] text-white/40">{Object.keys(slideImages).length} wygenerowanych</span>
+                )}
+              </div>
+              <button
+                onClick={generateImages}
+                disabled={generatingImages}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] bg-[#6366f1]/15 border border-[#6366f1]/30 text-[#a5b4fc] text-[11px] font-semibold hover:bg-[#6366f1]/25 transition-all disabled:opacity-60"
+              >
+                {generatingImages
+                  ? <><Loader2 size={11} className="animate-spin" /> Generuję grafiki…</>
+                  : <><Sparkles size={11} /> {Object.keys(slideImages).length > 0 ? 'Regeneruj grafiki' : 'Generuj grafiki AI'}</>
+                }
+              </button>
+            </div>
+
+            {imageError && (
+              <p className="px-4 py-2 text-[11px] text-red-400">{imageError}</p>
+            )}
+
+            {Object.keys(slideImages).length > 0 && (
+              <div className="p-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                {parseSlides(result.content_body).map((slide) => (
+                  <div key={slide.num} className="space-y-1.5">
+                    <div className="relative aspect-square rounded-[10px] overflow-hidden bg-white/[0.04] border border-white/[0.07]">
+                      {slideImages[slide.num] ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={slideImages[slide.num]} alt={`Slajd ${slide.num}`} className="w-full h-full object-cover" />
+                      ) : generatingImages ? (
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <Loader2 size={18} className="animate-spin text-white/30" />
+                        </div>
+                      ) : null}
+                      <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded-[4px] bg-black/60 text-white text-[9px] font-bold">
+                        {slide.num}
+                      </span>
+                      {slideImages[slide.num] && (
+                        <a
+                          href={slideImages[slide.num]}
+                          download={`slajd-${slide.num}.png`}
+                          className="absolute bottom-1.5 right-1.5 p-1 rounded-[4px] bg-black/60 text-white/70 hover:text-white transition-colors"
+                          title="Pobierz"
+                        >
+                          <ExternalLink size={10} />
+                        </a>
+                      )}
+                    </div>
+                    <p className="text-[9px] text-white/30 line-clamp-2 leading-relaxed">{slide.text.slice(0, 60)}…</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {Object.keys(slideImages).length === 0 && !generatingImages && (
+              <div className="px-4 py-5 text-center">
+                <p className="text-[11px] text-white/25">Kliknij &quot;Generuj grafiki AI&quot; — Gemini Imagen stworzy po jednej grafice na każdy slajd</p>
+              </div>
+            )}
           </div>
 
           {result.cta && (
