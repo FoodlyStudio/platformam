@@ -20,6 +20,7 @@ import {
   Zap,
   BrainCircuit,
   BookOpen,
+  Wand2,
 } from 'lucide-react'
 import { useLayout } from './LayoutContext'
 import { useBrandTheme } from '@/contexts/BrandThemeContext'
@@ -50,6 +51,7 @@ const NAV_SECTIONS = [
     section: 'Content',
     items: [
       { href: '/content-generator',   label: 'Generator Treści',  icon: Sparkles },
+      { href: '/content-studio',      label: 'Content Studio',    icon: Wand2 },
       { href: '/content-calendar',    label: 'Kalendarz',         icon: CalendarDays },
     ],
   },
